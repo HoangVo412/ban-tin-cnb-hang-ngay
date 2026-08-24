@@ -1,0 +1,29 @@
+name: Ban tin hang ngay
+
+on:
+  schedule:
+    # 23:30 UTC = 06:30 gio Viet Nam (UTC+7) ngay hom sau.
+    # 0-4 = Chu nhat den Thu nam UTC  ->  Thu hai den Thu sau gio VN.
+    - cron: '30 23 * * 0-4'
+  workflow_dispatch:        # cho phep bam chay thu bang tay
+
+jobs:
+  digest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Cai thu vien
+        run: pip install -r requirements.txt
+
+      - name: Chay ban tin
+        env:
+          GEMINI_API_KEY:    ${{ secrets.GEMINI_API_KEY }}
+          TELEGRAM_TOKEN:    ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID:  ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python main.py
