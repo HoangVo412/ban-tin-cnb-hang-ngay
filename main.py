@@ -17,7 +17,7 @@ import feedparser
 import urllib.request
 import urllib.parse
 
-from feeds import FEEDS, KEYWORDS_CB
+from feeds import FEEDS, KEYWORDS_CB, KEYWORDS_TECH
 
 # ----------------------------------------------------------------------
 # Cấu hình
@@ -38,7 +38,9 @@ MODEL_FALLBACKS = [
 ]
 HOURS_BACK = int(os.environ.get("HOURS_BACK", "26"))   # 26h để không hụt tin sát giờ
 MAX_PER_FEED = 30
-MAX_ITEMS_TO_AI = 220
+MAX_ITEMS_TO_AI = 280
+QUOTA_CB = 70          # suất dành riêng cho tin lao động/BHXH/thuế
+QUOTA_TECH = 70        # suất dành riêng cho tin tài chính/công nghệ/AI
 VN_TZ = timezone(timedelta(hours=7))
 
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -116,12 +118,53 @@ def collect():
     fresh.sort(key=lambda x: x["published"] or datetime.min.replace(tzinfo=timezone.utc),
                reverse=True)
     log(f"Còn {len(fresh)} tin trong {HOURS_BACK}h qua (đã khử trùng lặp).")
-    return fresh[:MAX_ITEMS_TO_AI]
+    return fresh
 
 
 def is_cb(item):
     blob = (item["title"] + " " + item["summary"]).lower()
     return any(k in blob for k in KEYWORDS_CB)
+
+
+def is_tech(item):
+    blob = (item["title"] + " " + item["summary"]).lower()
+    return any(k in blob for k in KEYWORDS_TECH)
+
+
+def select_by_quota(items):
+    """Cấp suất riêng cho từng mảng, tránh tin thời sự dồn dập đẩy văng
+    tin lao động và tin công nghệ ra khỏi danh sách gửi cho AI.
+    items đã được sắp xếp sẵn theo thời gian giảm dần."""
+    chosen, used = [], set()
+
+    def take(pred, quota):
+        n = 0
+        for idx, it in enumerate(items):
+            if n >= quota:
+                break
+            if idx in used or not pred(it):
+                continue
+            used.add(idx)
+            chosen.append(it)
+            n += 1
+        return n
+
+    n_cb = take(is_cb, QUOTA_CB)
+    n_tech = take(lambda x: is_tech(x) and not is_cb(x), QUOTA_TECH)
+
+    n_gen = 0
+    for idx, it in enumerate(items):
+        if len(chosen) >= MAX_ITEMS_TO_AI:
+            break
+        if idx in used:
+            continue
+        used.add(idx)
+        chosen.append(it)
+        n_gen += 1
+
+    log(f"Chọn gửi AI: {n_cb} tin lao động | {n_tech} tin tài chính-công nghệ "
+        f"| {n_gen} tin tổng hợp = {len(chosen)} tin")
+    return chosen
 
 
 # ----------------------------------------------------------------------
@@ -131,14 +174,16 @@ PROMPT = """Bạn là trợ lý biên tập bản tin nội bộ cho một chuy�
 tại một tổng công ty nhà nước ngành điện. Bản tin này sẽ được chuyển cho lãnh đạo đọc.
 
 Dưới đây là danh sách tin bài đã xuất bản trong 24 giờ qua, lấy từ RSS của các báo điện tử \
-chính thống. Tin nào có dấu [*] ở đầu là tin đã được lọc sơ bộ thuộc mảng lao động - tiền \
-lương - bảo hiểm - thuế.
+chính thống Việt Nam và một số nguồn quốc tế. Dấu ở đầu mỗi tin là kết quả lọc sơ bộ:
+  [LD] = thuộc mảng lao động, tiền lương, bảo hiểm, thuế
+  [CN] = thuộc mảng tài chính, công nghệ, AI
+Một số tin bằng tiếng Anh: hãy tóm tắt lại bằng tiếng Việt, giữ nguyên tên riêng.
 
 NHIỆM VỤ:
 
 PHẦN A - TIN NỔI BẬT TRONG NGÀY
-Chọn 10-12 tin quan trọng nhất, bao quát nhiều lĩnh vực (thời sự, kinh tế, pháp luật, \
-quốc tế, công nghệ, xã hội). Ưu tiên tin có tác động rộng, tránh tin vụ án lặt vặt, tin \
+Chọn 8-10 tin quan trọng nhất, bao quát nhiều lĩnh vực (thời sự, kinh tế, pháp luật, \
+quốc tế, xã hội). Không lặp lại tin đã đưa ở Phần B hoặc Phần C. Ưu tiên tin có tác động rộng, tránh tin vụ án lặt vặt, tin \
 giải trí, tin thể thao thường ngày, tin quảng cáo trá hình.
 Mỗi tin viết đúng 2 dòng:
   Dòng 1: tiêu đề rút gọn dưới 15 từ
@@ -155,8 +200,24 @@ tiêu đề tin được cung cấp.
 - Không suy diễn, không bổ sung kiến thức của bạn.
 - Nếu không có tin nào, ghi: "Không ghi nhận tin đáng chú ý trong 24h qua."
 
+PHẦN C - TÀI CHÍNH, CÔNG NGHỆ VÀ AI
+Chia làm 3 mục nhỏ, mỗi mục 2-3 tin, trình bày như Phần A:
+
+C1. Tài chính - kinh tế: lãi suất, tỷ giá, chứng khoán, giá vàng, chính sách thuế - \
+ngân sách, tín dụng, diễn biến vĩ mô. Ưu tiên tin có tác động tới doanh nghiệp nhà nước \
+và chi phí nhân công.
+
+C2. Công nghệ và AI: sản phẩm hoặc mô hình AI mới, cập nhật lớn của Microsoft 365, \
+Power Platform, Excel, công cụ tự động hóa văn phòng, an ninh mạng, chuyển đổi số.
+
+C3. AI ứng dụng trong nhân sự: AI trong tuyển dụng, chấm công, tính lương, phân tích \
+dữ liệu nhân sự, hoặc tác động của AI tới việc làm và cơ cấu lao động. Với mỗi tin, thêm \
+một câu nêu rõ có thể áp dụng gì vào công việc Lao động - Tiền lương. \
+Nếu không có tin nào phù hợp, ghi: "Không ghi nhận tin đáng chú ý trong 24h qua."
+
 YÊU CẦU TRÌNH BÀY:
-- Tiếng Việt, văn phong trang trọng, ngắn gọn.
+- Toàn bộ bản tin viết bằng tiếng Việt, văn phong trang trọng, ngắn gọn.
+- Tổng độ dài tối đa khoảng 700 từ.
 - VĂN BẢN THUẦN. Không dùng dấu *, #, -, bảng, emoji, hay bất kỳ ký hiệu markdown nào. \
 Đánh số thứ tự bằng "1." "2." "3.".
 - Không viết lời mở đầu hay lời kết. Bắt đầu ngay bằng "PHAN A - TIN NOI BAT TRONG NGAY" \
@@ -171,7 +232,12 @@ DANH SÁCH TIN:
 def build_items_text(items):
     lines = []
     for i, it in enumerate(items, 1):
-        flag = "[*] " if is_cb(it) else ""
+        if is_cb(it):
+            flag = "[LD] "
+        elif is_tech(it):
+            flag = "[CN] "
+        else:
+            flag = ""
         t = it["published"].astimezone(VN_TZ).strftime("%d/%m %H:%M") if it["published"] else "??"
         lines.append(f"{i}. {flag}{it['title']} | {it['summary']} | "
                      f"{it['source']} | {t} | {it['link']}")
@@ -303,7 +369,7 @@ def main():
         log(f"THIẾU biến môi trường: {', '.join(missing)}")
         sys.exit(1)
 
-    items = collect()
+    items = select_by_quota(collect())
     if not items:
         send_telegram("Bản tin hôm nay: không lấy được tin nào từ các nguồn RSS. "
                       "Kiểm tra lại log GitHub Actions.")
