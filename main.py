@@ -26,7 +26,16 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "").strip()
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
 
-MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+# Model chính: Gemini 3.7 Flash (mạnh nhất trong nhóm free tier của bạn).
+# Nếu model này bị khai tử hoặc sai tên, script sẽ tự thử các model dự phòng,
+# và cuối cùng tự dò danh sách model khả dụng từ API.
+MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.7-flash")
+MODEL_FALLBACKS = [
+    "gemini-3.7-flash",        # mạnh nhất - ưu tiên độ chính xác
+    "gemini-flash-latest",     # alias luôn trỏ tới bản Flash mới nhất
+    "gemini-3.6-flash",
+    "gemini-3.5-flash-lite",   # nhẹ nhất - lưới an toàn cuối
+]
 HOURS_BACK = int(os.environ.get("HOURS_BACK", "26"))   # 26h để không hụt tin sát giờ
 MAX_PER_FEED = 30
 MAX_ITEMS_TO_AI = 220
@@ -169,25 +178,91 @@ def build_items_text(items):
     return "\n".join(lines)
 
 
+def discover_models(client):
+    """Hỏi thẳng API xem tài khoản này đang dùng được model nào.
+    Dùng khi mọi tên model cứng đều sai/bị khai tử. Ưu tiên Flash, tránh Lite."""
+    try:
+        names = []
+        for m in client.models.list():
+            actions = getattr(m, "supported_actions", None) or []
+            if "generateContent" not in actions:
+                continue
+            name = (m.name or "").replace("models/", "")
+            if "gemini" in name and "flash" in name:
+                names.append(name)
+        # Ưu tiên bản không phải "lite", số hiệu lớn xếp trước
+        names.sort(key=lambda n: ("lite" in n, n), reverse=False)
+        names.sort(key=lambda n: "lite" in n)
+        log(f"  Model khả dụng phát hiện được: {names[:5]}")
+        return names[:3]
+    except Exception as ex:
+        log(f"  Không dò được danh sách model: {ex}")
+        return []
+
+
 def summarize(items):
     from google import genai
     client = genai.Client(api_key=GEMINI_API_KEY)
     prompt = PROMPT.format(items=build_items_text(items))
-    log(f"Gửi {len(items)} tin cho {MODEL} (~{len(prompt)} ký tự)...")
 
+    # Thứ tự thử: model chỉ định -> danh sách dự phòng -> tự dò từ API.
+    candidates = [MODEL] + [m for m in MODEL_FALLBACKS if m != MODEL]
     last_err = None
-    for attempt in range(3):
-        try:
-            resp = client.models.generate_content(model=MODEL, contents=prompt)
-            text = (resp.text or "").strip()
-            if text:
-                return text
-            last_err = "phản hồi rỗng"
-        except Exception as ex:
-            last_err = f"{type(ex).__name__}: {ex}"
-            log(f"  Gemini lỗi lần {attempt+1}: {last_err}")
-            time.sleep(5 * (attempt + 1))
-    raise RuntimeError(f"Gemini thất bại sau 3 lần: {last_err}")
+    discovered = False
+
+    while candidates:
+        model_name = candidates.pop(0)
+        log(f"Gửi {len(items)} tin cho {model_name} (~{len(prompt)} ký tự)...")
+        for attempt in range(3):
+            try:
+                resp = client.models.generate_content(model=model_name,
+                                                      contents=prompt)
+                text = (resp.text or "").strip()
+                if text:
+                    log(f"  Thành công với model {model_name}")
+                    return text
+                last_err = "phản hồi rỗng"
+            except Exception as ex:
+                last_err = f"{type(ex).__name__}: {ex}"
+                log(f"  {model_name} lỗi lần {attempt+1}: {last_err}")
+                blob = str(ex).lower()
+                # Model không tồn tại/bị khai tử -> khỏi thử lại, nhảy model khác
+                if "not_found" in blob or "no longer available" in blob:
+                    log(f"  Model {model_name} không dùng được, chuyển model khác.")
+                    break
+                # Hết hạn mức -> chờ lâu hơn rồi thử lại
+                if "resource_exhausted" in blob or "429" in blob:
+                    time.sleep(20 * (attempt + 1))
+                else:
+                    time.sleep(5 * (attempt + 1))
+
+        # Đã thử hết tên cứng mà vẫn hỏng -> hỏi API xem có model nào dùng được
+        if not candidates and not discovered:
+            discovered = True
+            log("Mọi model cố định đều thất bại, đang dò danh sách từ API...")
+            candidates = discover_models(client)
+
+    raise RuntimeError(f"Tất cả model đều thất bại. Lỗi cuối: {last_err}")
+
+
+def fallback_digest(items, err):
+    """Khi AI hỏng hoàn toàn: gửi danh sách tiêu đề thô, để anh vẫn có tin."""
+    cb = [i for i in items if is_cb(i)][:10]
+    other = [i for i in items if not is_cb(i)][:12]
+
+    lines = ["(*) AI KHONG PHAN HOI - DAY LA DANH SACH TIEU DE THO",
+             f"Loi: {err}", "", "PHẦN A - TIN MỚI NHẤT", ""]
+    for n, it in enumerate(other, 1):
+        lines.append(f"{n}. {it['title']}")
+        lines.append(f"   {it['source']} - {it['link']}")
+    lines += ["", "PHẦN B - LAO ĐỘNG, TIỀN LƯƠNG, BHXH, THUẾ", ""]
+    if cb:
+        for n, it in enumerate(cb, 1):
+            lines.append(f"{n}. {it['title']}")
+            lines.append(f"   {it['source']} - {it['link']}")
+    else:
+        lines.append("Không ghi nhận tin đáng chú ý trong 24h qua.")
+    return "\n".join(lines)
 
 
 # ----------------------------------------------------------------------
@@ -234,7 +309,12 @@ def main():
                       "Kiểm tra lại log GitHub Actions.")
         return
 
-    body = summarize(items)
+    try:
+        body = summarize(items)
+    except Exception as ex:
+        log(f"AI thất bại hoàn toàn -> gửi bản dự phòng. {ex}")
+        body = fallback_digest(items, ex)
+
     header = f"BẢN TIN TỔNG HỢP {datetime.now(VN_TZ):%d/%m/%Y}\n" + "=" * 32 + "\n\n"
     footer = ("\n\n" + "-" * 32 +
               "\nNguồn: RSS các báo điện tử. Nội dung do AI tổng hợp, "
