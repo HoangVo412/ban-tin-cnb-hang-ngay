@@ -17,7 +17,8 @@ import feedparser
 import urllib.request
 import urllib.parse
 
-from feeds import FEEDS, KEYWORDS_CB, KEYWORDS_TECH
+from feeds import (FEEDS, STRONG_CB, WEAK_CB, STRONG_TECH, WEAK_TECH,
+                   SOURCE_BOOST_CB, SOURCE_BOOST_TECH, SCORE_THRESHOLD)
 
 # ----------------------------------------------------------------------
 # Cấu hình
@@ -121,36 +122,82 @@ def collect():
     return fresh
 
 
+# --- Biên dịch sẵn regex ranh giới từ (chạy 1 lần, nhanh) ---
+def _compile(words):
+    # (?<!\w) ... (?!\w) = ranh giới từ, có hiểu ký tự tiếng Việt.
+    # Nhờ vậy "ai" không còn khớp vào hai/tai/thai/khai/trai/mai/sai.
+    return [re.compile(r"(?<!\w)" + re.escape(w) + r"(?!\w)", re.UNICODE)
+            for w in words]
+
+_RE_STRONG_CB = _compile(STRONG_CB)
+_RE_WEAK_CB = _compile(WEAK_CB)
+_RE_STRONG_TECH = _compile(STRONG_TECH)
+_RE_WEAK_TECH = _compile(WEAK_TECH)
+
+
+def _blob(item):
+    return (item["title"] + " " + item["summary"]).lower()
+
+
+def _source_boost(item, table):
+    src = item["source"]
+    for prefix, pts in table.items():
+        if src.startswith(prefix):
+            return pts
+    return 0
+
+
+def score_cb(item):
+    """Điểm mức độ thuộc mảng lao động - tiền lương - BHXH - thuế."""
+    b = _blob(item)
+    s = _source_boost(item, SOURCE_BOOST_CB)
+    s += 3 * sum(1 for r in _RE_STRONG_CB if r.search(b))
+    s += 1 * sum(1 for r in _RE_WEAK_CB if r.search(b))
+    return s
+
+
+def score_tech(item):
+    """Điểm mức độ thuộc mảng tài chính - công nghệ - AI."""
+    b = _blob(item)
+    s = _source_boost(item, SOURCE_BOOST_TECH)
+    s += 3 * sum(1 for r in _RE_STRONG_TECH if r.search(b))
+    s += 1 * sum(1 for r in _RE_WEAK_TECH if r.search(b))
+    return s
+
+
 def is_cb(item):
-    blob = (item["title"] + " " + item["summary"]).lower()
-    return any(k in blob for k in KEYWORDS_CB)
+    return score_cb(item) >= SCORE_THRESHOLD
 
 
 def is_tech(item):
-    blob = (item["title"] + " " + item["summary"]).lower()
-    return any(k in blob for k in KEYWORDS_TECH)
+    return score_tech(item) >= SCORE_THRESHOLD
 
 
 def select_by_quota(items):
-    """Cấp suất riêng cho từng mảng, tránh tin thời sự dồn dập đẩy văng
-    tin lao động và tin công nghệ ra khỏi danh sách gửi cho AI.
-    items đã được sắp xếp sẵn theo thời gian giảm dần."""
-    chosen, used = [], set()
+    """Cấp suất riêng cho từng mảng. Trong mỗi suất, chọn theo ĐIỂM LIÊN QUAN
+    (cao xuống thấp), không phải theo độ mới - để một tin BHXH quan trọng
+    không bị 70 tin 'công tác nhân sự' đăng sau đẩy văng ra ngoài."""
+    used = set()
+    chosen = []
 
-    def take(pred, quota):
-        n = 0
+    def take(scorer, quota, label):
+        ranked = []
         for idx, it in enumerate(items):
-            if n >= quota:
-                break
-            if idx in used or not pred(it):
+            if idx in used:
                 continue
+            sc = scorer(it)
+            if sc >= SCORE_THRESHOLD:
+                # điểm cao trước; cùng điểm thì tin mới trước (idx nhỏ = mới hơn)
+                ranked.append((-sc, idx, it))
+        ranked.sort()
+        for _, idx, it in ranked[:quota]:
             used.add(idx)
             chosen.append(it)
-            n += 1
-        return n
+        log(f"  {label}: {len(ranked)} tin đạt ngưỡng, lấy {min(len(ranked), quota)}")
+        return min(len(ranked), quota)
 
-    n_cb = take(is_cb, QUOTA_CB)
-    n_tech = take(lambda x: is_tech(x) and not is_cb(x), QUOTA_TECH)
+    n_cb = take(score_cb, QUOTA_CB, "Lao động")
+    n_tech = take(score_tech, QUOTA_TECH, "Tài chính-Công nghệ")
 
     n_gen = 0
     for idx, it in enumerate(items):
@@ -162,8 +209,8 @@ def select_by_quota(items):
         chosen.append(it)
         n_gen += 1
 
-    log(f"Chọn gửi AI: {n_cb} tin lao động | {n_tech} tin tài chính-công nghệ "
-        f"| {n_gen} tin tổng hợp = {len(chosen)} tin")
+    log(f"Chọn gửi AI: {n_cb} lao động | {n_tech} tài chính-công nghệ "
+        f"| {n_gen} tổng hợp = {len(chosen)} tin")
     return chosen
 
 

@@ -49,7 +49,6 @@ FEEDS = {
         "NLĐ - Tài chính/Chứng khoán",                                                # [CT]
     "https://tuoitre.vn/nld/rss/dong-tien-thong-minh.rss":
         "NLĐ - Đồng tiền thông minh",                                                 # [CT]
-    "https://vneconomy.vn/rss/tai-chinh.rss":           "VnEconomy - Tài chính",      # [??]
     "https://cafef.vn/tai-chinh-ngan-hang.rss":         "CafeF - Tài chính NH",       # [??]
     "https://cafef.vn/vi-mo-dau-tu.rss":                "CafeF - Vĩ mô",              # [??]
 
@@ -76,35 +75,81 @@ FEEDS = {
         "HR Dive - Nhân sự quốc tế",                                                  # [??]
 }
 
-# ----------------------------------------------------------------------
-# Từ khóa phân loại. Tin trúng từ khóa sẽ được cấp "suất" riêng khi gửi
-# cho AI, tránh bị tin thời sự dồn dập đẩy văng khỏi danh sách.
-# ----------------------------------------------------------------------
+# ======================================================================
+# TỪ KHÓA PHÂN LOẠI - CÓ CHẤM ĐIỂM
+# ======================================================================
+# So khớp theo RANH GIỚI TỪ, không phải chuỗi con.
+# Lý do: từ khóa "ai" nếu khớp chuỗi con sẽ dính vào hai, tai, thai, khai,
+# trai, mai, sai... tức gần như mọi tin tiếng Việt.
+#
+# Tin phải đạt tối thiểu SCORE_THRESHOLD điểm mới được gắn cờ.
+#   từ mạnh  = 3 điểm   (đặc thù, gần như không thể nhầm)
+#   từ yếu   = 1 điểm   (phổ thông, cần cộng dồn mới đủ tin cậy)
+#   nguồn    = xem SOURCE_BOOST bên dưới
 
-KEYWORDS_CB = [
-    "lao động", "tiền lương", "tiền công", "lương tối thiểu", "lương hưu",
-    "bảo hiểm xã hội", "bhxh", "bảo hiểm y tế", "bhyt", "thất nghiệp", "bhtn",
-    "thuế thu nhập cá nhân", "thuế tncn", "giảm trừ gia cảnh", "quyết toán thuế",
-    "hợp đồng lao động", "công đoàn", "nghỉ hưu", "biên chế", "công chức",
-    "viên chức", "tinh giản", "trợ cấp", "phụ cấp", "làm thêm giờ", "nghỉ lễ",
-    "bộ luật lao động", "nghị định", "thông tư", "an toàn lao động",
-    "tuyển dụng", "sa thải", "việc làm", "nhân sự", "evn", "điện lực",
-    "an sinh xã hội", "xuất khẩu lao động",
-    # tiếng Anh (cho các feed quốc tế)
-    "hr ", "human resources", "payroll", "workforce", "employee", "hiring",
-    "layoff", "recruit", "labor", "labour", "compensation", "benefits",
+SCORE_THRESHOLD = 3
+
+# ---------------------- LAO ĐỘNG - TIỀN LƯƠNG - BHXH - THUẾ ----------------------
+STRONG_CB = [
+    "tiền lương", "tiền công", "lương tối thiểu", "lương hưu", "lương cơ sở",
+    "bảo hiểm xã hội", "bhxh", "bảo hiểm y tế", "bhyt", "bảo hiểm thất nghiệp",
+    "bhtn", "trợ cấp thất nghiệp", "thuế thu nhập cá nhân", "thuế tncn",
+    "giảm trừ gia cảnh", "quyết toán thuế", "hợp đồng lao động", "bộ luật lao động",
+    "an toàn lao động", "làm thêm giờ", "tăng ca", "nghỉ hưu", "tuổi nghỉ hưu",
+    "xuất khẩu lao động", "công đoàn", "người lao động", "an sinh xã hội",
+    "thang bảng lương", "nâng bậc lương", "phụ cấp", "thưởng tết", "lương thưởng",
+    "tinh giản biên chế", "định biên", "sa thải", "thất nghiệp",
+    "thai sản", "chế độ thai sản", "ốm đau", "tai nạn lao động", "bệnh nghề nghiệp",
+    "nghỉ phép", "phép năm", "chấm công", "định mức lao động", "năng suất lao động",
+    "thỏa ước lao động", "nội quy lao động", "kỷ luật lao động", "đình công",
+    "quan hệ lao động", "tiền lương tối thiểu", "thu nhập bình quân",
+    # tiếng Anh
+    "payroll", "human resources", "compensation and benefits", "labor law",
+    "minimum wage", "workforce", "layoff", "severance", "employee benefits",
+]
+WEAK_CB = [
+    "lao động", "việc làm", "nhân sự", "tuyển dụng", "nghị định", "thông tư",
+    "công chức", "viên chức", "biên chế", "trợ cấp", "nghỉ lễ", "chế độ",
+    "lương", "bảo hiểm", "thuế", "evn", "điện lực", "doanh nghiệp nhà nước",
+    "hiring", "recruit", "employee", "hr", "labour",
 ]
 
-KEYWORDS_TECH = [
-    # công nghệ & AI
-    "ai", "trí tuệ nhân tạo", "chatgpt", "gemini", "claude", "openai",
-    "anthropic", "google", "microsoft", "copilot", "chuyển đổi số",
-    "tự động hóa", "phần mềm", "dữ liệu", "big data", "machine learning",
-    "công nghệ", "số hóa", "chip", "bán dẫn", "an ninh mạng", "bảo mật",
-    "excel", "power bi", "automation", "artificial intelligence", "llm",
-    "agent", "model", "startup", "cloud",
-    # tài chính
-    "tài chính", "chứng khoán", "ngân hàng", "lãi suất", "tỷ giá", "vn-index",
-    "trái phiếu", "cổ phiếu", "vàng", "lạm phát", "tín dụng", "đầu tư",
-    "gdp", "thuế", "ngân sách", "fed", "usd",
+# ---------------------- TÀI CHÍNH - CÔNG NGHỆ - AI ----------------------
+STRONG_TECH = [
+    "trí tuệ nhân tạo", "chatgpt", "gemini", "claude", "openai", "anthropic",
+    "copilot", "chuyển đổi số", "tự động hóa", "machine learning", "deep learning",
+    "an ninh mạng", "bảo mật", "power bi", "power automate", "power query",
+    "artificial intelligence", "generative ai", "llm", "automation",
+    "chứng khoán", "vn-index", "lãi suất", "tỷ giá", "trái phiếu", "cổ phiếu",
+    "lạm phát", "tín dụng", "ngân hàng nhà nước", "giá vàng", "thuế quan",
+    # viết tắt / tên riêng - dùng ranh giới từ nên an toàn
+    "ai", "gdp", "fed", "usd", "api",
 ]
+WEAK_TECH = [
+    "công nghệ", "phần mềm", "dữ liệu", "số hóa", "chip", "bán dẫn", "excel",
+    "startup", "đầu tư", "tài chính", "ngân hàng", "ngân sách", "vàng",
+    "google", "microsoft", "apple", "meta", "nvidia", "samsung",
+    "model", "agent", "cloud", "data", "software", "chatbot",
+]
+
+# ---------------------- ƯU TIÊN THEO NGUỒN ----------------------
+# Nguồn chuyên đề là tín hiệu đáng tin hơn mọi từ khóa: một bài nằm trong
+# chuyên mục "Lao động/Chính sách" thì gần như chắc chắn thuộc mảng C&B,
+# kể cả khi tiêu đề không chứa từ khóa nào.
+SOURCE_BOOST_CB = {
+    "NLĐ - Lao động": 6,
+    "HR Dive": 5,
+}
+SOURCE_BOOST_TECH = {
+    "NLĐ - AI 365": 6,
+    "TechCrunch - AI": 6,
+    "VentureBeat - AI": 6,
+    "GenK": 4,
+    "CafeF": 4,
+    "NLĐ - Tài chính": 4,
+    "NLĐ - Đồng tiền": 4,
+    "Dân Trí - Sức mạnh số": 4,
+    "Thanh Niên - Công nghệ": 3,
+    "Tuổi Trẻ - Công nghệ": 3,
+    "VnExpress - Khoa học CN": 3,
+}
