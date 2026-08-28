@@ -2,10 +2,30 @@ name: Ban tin hang ngay
 
 on:
   schedule:
-    # 23:30 UTC = 06:30 gio Viet Nam (UTC+7) ngay hom sau.
-    # 0-4 = Chu nhat den Thu nam UTC  ->  Thu hai den Thu sau gio VN.
-    - cron: '30 23 * * 0-4'
-  workflow_dispatch:        # cho phep bam chay thu bang tay
+    # GitHub Actions KHONG bao dam chay dung gio. Khi he thong qua tai,
+    # job bi tri hang gio hoac bi huy luon. Vi vay dat 2 lich:
+    #
+    #   Lich chinh : 22:47 UTC = 05:47 gio VN ngay hom sau
+    #   Lich du phong: 01:15 UTC = 08:15 gio VN cung ngay
+    #
+    # Dung phut le (:47, :15) de tranh dinh tai o cac moc tron :00 va :30.
+    # File last_run.txt dam bao chi gui 1 lan/ngay du ca 2 lich deu chay.
+    - cron: '47 22 * * 0-4'      # CN-T5 UTC  ->  T2-T6 gio VN
+    - cron: '15 1 * * 1-5'       # T2-T6 UTC  ->  T2-T6 gio VN
+  workflow_dispatch:
+    inputs:
+      force:
+        description: 'Gui lai du hom nay da gui roi'
+        type: boolean
+        default: false
+
+# Khong cho 2 lan chay chong len nhau
+concurrency:
+  group: bantin
+  cancel-in-progress: false
+
+permissions:
+  contents: write        # can quyen ghi de commit lai last_run.txt
 
 jobs:
   digest:
@@ -26,4 +46,18 @@ jobs:
           GEMINI_API_KEY:    ${{ secrets.GEMINI_API_KEY }}
           TELEGRAM_TOKEN:    ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID:  ${{ secrets.TELEGRAM_CHAT_ID }}
+          FORCE_RUN:         ${{ inputs.force }}
         run: python main.py
+
+      - name: Ghi dau ngay da gui
+        run: |
+          if [ -n "$(git status --porcelain last_run.txt)" ]; then
+            git config user.name  "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add last_run.txt
+            git commit -m "Ban tin $(cat last_run.txt)"
+            git push
+            echo "Da commit last_run.txt"
+          else
+            echo "Khong co thay doi, bo qua commit"
+          fi
