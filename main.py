@@ -44,6 +44,12 @@ QUOTA_CB = 70          # suất dành riêng cho tin lao động/BHXH/thuế
 QUOTA_TECH = 70        # suất dành riêng cho tin tài chính/công nghệ/AI
 VN_TZ = timezone(timedelta(hours=7))
 
+# File ghi dấu ngày đã gửi, nằm ngay trong repository và được commit ngược lại.
+# Mục đích: có 2 lịch chạy/ngày (lịch chính + lịch dự phòng khi GitHub trễ),
+# file này đảm bảo chỉ gửi bản tin 1 lần/ngày.
+STATE_FILE = "last_run.txt"
+FORCE_RUN = os.environ.get("FORCE_RUN", "").strip().lower() in ("1", "true", "yes")
+
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/125.0 Safari/537.36")
 
@@ -408,6 +414,35 @@ def send_telegram(text):
 
 
 # ----------------------------------------------------------------------
+# 4. Chống gửi trùng trong ngày
+# ----------------------------------------------------------------------
+def today_vn():
+    return datetime.now(VN_TZ).strftime("%Y-%m-%d")
+
+
+def already_sent_today():
+    if FORCE_RUN:
+        log("FORCE_RUN bật -> bỏ qua kiểm tra trùng ngày.")
+        return False
+    try:
+        with open(STATE_FILE, encoding="utf-8") as f:
+            last = f.read().strip()
+    except FileNotFoundError:
+        return False
+    if last == today_vn():
+        log(f"Bản tin ngày {last} đã gửi rồi -> thoát, không gửi lại.")
+        return True
+    log(f"Lần gửi gần nhất: {last or '(chưa có)'} | Hôm nay: {today_vn()}")
+    return False
+
+
+def mark_sent():
+    with open(STATE_FILE, "w", encoding="utf-8") as f:
+        f.write(today_vn())
+    log(f"Đã ghi dấu ngày gửi: {today_vn()}")
+
+
+# ----------------------------------------------------------------------
 def main():
     missing = [n for n, v in [("GEMINI_API_KEY", GEMINI_API_KEY),
                               ("TELEGRAM_TOKEN", TELEGRAM_TOKEN),
@@ -415,6 +450,9 @@ def main():
     if missing:
         log(f"THIẾU biến môi trường: {', '.join(missing)}")
         sys.exit(1)
+
+    if already_sent_today():
+        return
 
     items = select_by_quota(collect())
     if not items:
@@ -433,6 +471,7 @@ def main():
               "\nNguồn: RSS các báo điện tử. Nội dung do AI tổng hợp, "
               "vui lòng kiểm chứng văn bản gốc trước khi trích dẫn.")
     send_telegram(header + body + footer)
+    mark_sent()
     log("Xong.")
 
 
