@@ -19,6 +19,12 @@ on:
         type: boolean
         default: false
 
+  # Cua sau goi qua REST API - Cloudflare Worker dung cai nay khi anh go /run.
+  # Khac voi schedule (hang doi cron, hay tre), repository_dispatch chay NGAY.
+  # Luu y: chi hoat dong khi file workflow nam tren nhanh mac dinh (main).
+  repository_dispatch:
+    types: [run-bantin]
+
 concurrency:
   group: bantin
   cancel-in-progress: false
@@ -45,7 +51,9 @@ jobs:
           GEMINI_API_KEY:    ${{ secrets.GEMINI_API_KEY }}
           TELEGRAM_TOKEN:    ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID:  ${{ secrets.TELEGRAM_CHAT_ID }}
-          FORCE_RUN:         ${{ inputs.force }}
+          # Bat FORCE_RUN khi chay tay hoac khi Worker goi qua /run.
+          # Voi lich tu dong (schedule) thi ca hai deu rong -> FORCE_RUN tat.
+          FORCE_RUN:         ${{ inputs.force || github.event.client_payload.force }}
         run: python main.py
 
       # Buoc ghi so nay KHONG duoc lam job that bai:
