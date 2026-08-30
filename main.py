@@ -31,12 +31,21 @@ TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
 # Nếu model này bị khai tử hoặc sai tên, script sẽ tự thử các model dự phòng,
 # và cuối cùng tự dò danh sách model khả dụng từ API.
 MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.7-flash")
+# Thứ tự dự phòng phải nhảy sang model KHÁC DÒNG.
+# Bài học từ log ngày 30/08: khi 3.7-flash quá tải (503), script nhảy sang
+# "gemini-flash-latest" - nhưng đó chỉ là ALIAS trỏ về chính 3.7-flash, nên
+# vẫn nghẽn y hệt. Alias giờ để cuối cùng, chỉ dùng khi mọi tên cứng đều sai.
 MODEL_FALLBACKS = [
     "gemini-3.7-flash",        # mạnh nhất - ưu tiên độ chính xác
-    "gemini-flash-latest",     # alias luôn trỏ tới bản Flash mới nhất
-    "gemini-3.6-flash",
-    "gemini-3.5-flash-lite",   # nhẹ nhất - lưới an toàn cuối
+    "gemini-3.6-flash",        # khác dòng - thoát được nghẽn của 3.7
+    "gemini-3.5-flash-lite",   # nhẹ, ít nghẽn nhất
+    "gemini-flash-latest",     # alias - lưới an toàn khi Google đổi tên model
 ]
+
+# Ngân sách thời gian cho toàn bộ khâu gọi AI (giây).
+# Workflow bị cắt ở phút 15. Dừng thử ở phút 8 để còn kịp gửi bản tin dự phòng
+# thay vì bị giết ngang và anh không nhận được gì.
+AI_TIME_BUDGET = 480
 HOURS_BACK = int(os.environ.get("HOURS_BACK", "26"))   # 26h để không hụt tin sát giờ
 MAX_PER_FEED = 30
 MAX_ITEMS_TO_AI = 280
@@ -328,32 +337,66 @@ def summarize(items):
     candidates = [MODEL] + [m for m in MODEL_FALLBACKS if m != MODEL]
     last_err = None
     discovered = False
+    started = time.time()
+
+    def out_of_time():
+        spent = time.time() - started
+        if spent > AI_TIME_BUDGET:
+            log(f"  Đã dùng {spent:.0f}s, vượt ngân sách {AI_TIME_BUDGET}s -> dừng thử.")
+            return True
+        return False
 
     while candidates:
         model_name = candidates.pop(0)
         log(f"Gửi {len(items)} tin cho {model_name} (~{len(prompt)} ký tự)...")
-        for attempt in range(3):
+
+        # Mỗi model được thử tối đa 3 lần, nhưng model đang quá tải thì
+        # chỉ 2 lần rồi chuyển sang model khác - chờ lâu vô ích vì nghẽn
+        # nằm ở phía Google, không phải phía mình.
+        max_attempts = 3
+        attempt = 0
+        while attempt < max_attempts:
+            if out_of_time():
+                raise RuntimeError(f"Hết ngân sách thời gian. Lỗi cuối: {last_err}")
+            attempt += 1
             try:
                 resp = client.models.generate_content(model=model_name,
                                                       contents=prompt)
                 text = (resp.text or "").strip()
                 if text:
-                    log(f"  Thành công với model {model_name}")
+                    log(f"  Thành công với model {model_name} "
+                        f"sau {time.time()-started:.0f}s")
                     return text
                 last_err = "phản hồi rỗng"
             except Exception as ex:
                 last_err = f"{type(ex).__name__}: {ex}"
-                log(f"  {model_name} lỗi lần {attempt+1}: {last_err}")
                 blob = str(ex).lower()
-                # Model không tồn tại/bị khai tử -> khỏi thử lại, nhảy model khác
+                short = last_err[:110]
+                log(f"  {model_name} lỗi lần {attempt}: {short}")
+
+                # (a) Model không tồn tại / bị khai tử -> nhảy model khác ngay
                 if "not_found" in blob or "no longer available" in blob:
                     log(f"  Model {model_name} không dùng được, chuyển model khác.")
                     break
-                # Hết hạn mức -> chờ lâu hơn rồi thử lại
+
+                # (b) Model quá tải phía Google (503). Không phải lỗi hạn mức
+                #     của mình. Thử thêm 1 lần rồi chuyển model KHÁC DÒNG.
+                if ("unavailable" in blob or "503" in blob
+                        or "overloaded" in blob or "high demand" in blob):
+                    max_attempts = 2
+                    if attempt >= max_attempts:
+                        log(f"  {model_name} đang quá tải, chuyển model khác.")
+                        break
+                    time.sleep(15)
+                    continue
+
+                # (c) Hết hạn mức của mình -> chờ lâu hơn rồi thử lại
                 if "resource_exhausted" in blob or "429" in blob:
-                    time.sleep(20 * (attempt + 1))
-                else:
-                    time.sleep(5 * (attempt + 1))
+                    time.sleep(20 * attempt)
+                    continue
+
+                # (d) Lỗi khác (mạng, timeout...) -> chờ ngắn rồi thử lại
+                time.sleep(5 * attempt)
 
         # Đã thử hết tên cứng mà vẫn hỏng -> hỏi API xem có model nào dùng được
         if not candidates and not discovered:
