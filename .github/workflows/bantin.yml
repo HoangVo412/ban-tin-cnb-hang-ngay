@@ -2,13 +2,13 @@ name: Ban tin hang ngay
 
 on:
   schedule:
-    # GitHub Actions KHONG bao dam chay dung gio. Khi he thong qua tai,
-    # job bi tri hang gio hoac bi huy luon. Vi vay dat 2 lich:
+    # GitHub Actions KHONG bao dam chay dung gio, ke ca voi repo public.
+    # Khi he thong qua tai, job bi tri hang gio hoac bi huy luon.
+    # Vi vay dat 2 lich, dung phut le de tranh dinh tai o cac moc :00 va :30.
     #
-    #   Lich chinh : 22:47 UTC = 05:47 gio VN ngay hom sau
-    #   Lich du phong: 01:15 UTC = 08:15 gio VN cung ngay
+    #   Lich chinh    : 22:47 UTC = 05:47 gio VN ngay hom sau
+    #   Lich du phong : 01:15 UTC = 08:15 gio VN cung ngay
     #
-    # Dung phut le (:47, :15) de tranh dinh tai o cac moc tron :00 va :30.
     # File last_run.txt dam bao chi gui 1 lan/ngay du ca 2 lich deu chay.
     - cron: '47 22 * * 0-4'      # CN-T5 UTC  ->  T2-T6 gio VN
     - cron: '15 1 * * 1-5'       # T2-T6 UTC  ->  T2-T6 gio VN
@@ -19,13 +19,12 @@ on:
         type: boolean
         default: false
 
-# Khong cho 2 lan chay chong len nhau
 concurrency:
   group: bantin
   cancel-in-progress: false
 
 permissions:
-  contents: write        # can quyen ghi de commit lai last_run.txt
+  contents: write
 
 jobs:
   digest:
@@ -49,15 +48,30 @@ jobs:
           FORCE_RUN:         ${{ inputs.force }}
         run: python main.py
 
+      # Buoc ghi so nay KHONG duoc lam job that bai:
+      # ban tin da gui roi, mot xung dot git khong dang bao dong do.
       - name: Ghi dau ngay da gui
+        if: always()
         run: |
-          if [ -n "$(git status --porcelain last_run.txt)" ]; then
-            git config user.name  "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add last_run.txt
-            git commit -m "Ban tin $(cat last_run.txt)"
-            git push
-            echo "Da commit last_run.txt"
-          else
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add last_run.txt 2>/dev/null || true
+          git add last_update_id.txt 2>/dev/null || true
+          if git diff --cached --quiet; then
             echo "Khong co thay doi, bo qua commit"
+            exit 0
           fi
+          git commit -m "Ban tin $(cat last_run.txt 2>/dev/null || date -u +%F)"
+          # Repository co the vua duoc workflow khac push vao -> thu lai vai lan
+          for i in 1 2 3 4 5; do
+            if git push; then
+              echo "Da luu last_run.txt"
+              exit 0
+            fi
+            echo "Push bi tu choi, dong bo lai roi thu lai (lan $i)"
+            git pull --rebase --autostash origin main || true
+            sleep 3
+          done
+          echo "CANH BAO: khong push duoc sau 5 lan."
+          echo "Ban tin VAN da gui thanh cong. Rui ro: lich du phong co the gui trung."
+          exit 0
