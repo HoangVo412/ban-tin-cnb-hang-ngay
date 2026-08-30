@@ -3,19 +3,16 @@ name: Nghe lenh Telegram
 # Job nay dinh ky hoi Telegram xem co lenh moi khong.
 # Go /run trong Telegram -> lan do ke tiep se chay ban tin.
 #
-# LUU Y VE CHI PHI: moi lan chay tinh toi thieu 1 phut Actions.
-# Repository private co 2.000 phut mien phi/thang.
-# Lich hien tai: 15 phut/lan, tu 05:00 den 17:00 gio VN, T2-T6
-#   = 48 lan/ngay x 22 ngay ~ 1.056 phut/thang. Con du cho job ban tin.
+# Repository dang PUBLIC nen phut Actions mien phi khong gioi han,
+# vi vay do 10 phut/lan, 24/7, ca cuoi tuan.
+# Neu sau nay doi lai sang Private (2.000 phut/thang), phai thu hep
+# lich lai, vi du: '*/15 0-9 * * 1-5' (chi gio hanh chinh, T2-T6).
 #
-# Neu muon do lien tuc 24/7 ma khong lo phut: doi repository sang Public
-# (Settings > General > Danger Zone > Change visibility).
-# Secrets van duoc giau kin khi repo public.
+# Do tre thuc te: 0-10 phut cho cho lan do, cong do tre cua cron GitHub.
 
 on:
   schedule:
-    - cron: '*/15 22-23 * * 0-4'    # 05:00-06:59 gio VN
-    - cron: '*/15 0-9 * * 1-5'      # 07:00-16:59 gio VN
+    - cron: '*/10 * * * *'
   workflow_dispatch:
 
 concurrency:
@@ -51,12 +48,21 @@ jobs:
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A last_update_id.txt last_run.txt 2>/dev/null || true
+          git add last_update_id.txt 2>/dev/null || true
+          git add last_run.txt 2>/dev/null || true
           if git diff --cached --quiet; then
             echo "Khong co thay doi"
-          else
-            git commit -m "Cap nhat trang thai bot"
-            git pull --rebase --autostash origin main || true
-            git push
-            echo "Da luu trang thai"
+            exit 0
           fi
+          git commit -m "Cap nhat trang thai bot"
+          for i in 1 2 3 4 5; do
+            if git push; then
+              echo "Da luu trang thai"
+              exit 0
+            fi
+            echo "Push bi tu choi, dong bo lai roi thu lai (lan $i)"
+            git pull --rebase --autostash origin main || true
+            sleep 3
+          done
+          echo "CANH BAO: khong luu duoc trang thai sau 5 lan."
+          exit 0
