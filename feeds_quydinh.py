@@ -33,19 +33,10 @@ FEEDS = {
     # script tự bỏ qua và chạy tiếp bằng các nguồn còn lại.
     "https://thuvienphapluat.vn/rss.xml": ("ThuVienPhapLuat", "vanban", "std"),
 
-    # ---------- BỔ SUNG CHUYÊN NGÀNH ----------
-    # Đã kiểm chứng 01/09/2026: feed sống, tiêu đề đầy đủ.
-    # Đây là TIN NGÀNH, không phải văn bản -> không có số hiệu.
-    "https://baohiemxahoi.gov.vn/pages/chi-tiet-kenh-rss.aspx?ItemID=2":
-        ("BHXH Việt Nam - Tin tức", "tin", "std"),
-    "https://baohiemxahoi.gov.vn/pages/chi-tiet-kenh-rss.aspx?ItemID=3":
-        ("BHXH Việt Nam - Hoạt động ngành", "tin", "std"),
-    "https://baohiemxahoi.gov.vn/pages/chi-tiet-kenh-rss.aspx?ItemID=4":
-        ("BHXH Việt Nam - Luật BHXH, BHYT", "tin", "std"),
-    "https://baohiemxahoi.gov.vn/pages/chi-tiet-kenh-rss.aspx?ItemID=8":
-        ("BHXH Việt Nam - Ốm đau, thai sản", "tin", "std"),
-    "https://baohiemxahoi.gov.vn/pages/chi-tiet-kenh-rss.aspx?ItemID=10":
-        ("BHXH Việt Nam - Cải cách TTHC", "tin", "std"),
+    # ---------- ĐÃ GỠ: BHXH Việt Nam ----------
+    # 5 kênh RSS của baohiemxahoi.gov.vn trả về đường dẫn nội bộ
+    # FW.aspx?ItemID=N -> Page not found. Không dựng lại được địa chỉ thật
+    # vì thiếu mã chuyên mục. Nguồn cấp sai link thì không dùng được.
 
     # ---------- BÁO CHÍ (bắt nhanh, kém chính xác hơn) ----------
     "https://vnexpress.net/rss/phap-luat.rss":  ("VnExpress - Pháp luật", "tin", "std"),
@@ -66,7 +57,7 @@ FEEDS = {
 # ======================================================================
 # Cơ chế chấm điểm giống bản tin C&B: từ mạnh 3 điểm, từ yếu 1 điểm,
 # đạt SCORE_THRESHOLD mới được đưa vào bản tin.
-SCORE_THRESHOLD = 3
+SCORE_THRESHOLD = 4
 
 STRONG_KW = [
     # tiền lương
@@ -80,6 +71,10 @@ STRONG_KW = [
     # thuế
     "thuế thu nhập cá nhân", "thuế tncn", "giảm trừ gia cảnh",
     "quyết toán thuế", "thu nhập chịu thuế", "người nộp thuế",
+    # Công văn cơ quan thuế: feed có 80 công văn, 28 về thuế. Loại này không
+    # mang dấu QĐ-UBND nên không bị lọc theo tỉnh, chỉ cần trúng từ khóa.
+    "chính sách thuế", "miễn thuế", "giảm thuế", "hoàn thuế", "khấu trừ thuế",
+    "lệ phí trước bạ", "hóa đơn", "kê khai thuế", "mã số thuế",
     # lao động
     "bộ luật lao động", "hợp đồng lao động", "quan hệ lao động", "công đoàn",
     "an toàn lao động", "vệ sinh lao động", "làm thêm giờ", "thời giờ làm việc",
@@ -90,6 +85,20 @@ STRONG_KW = [
     "tuyển dụng viên chức", "đánh giá xếp loại chất lượng",
 ]
 
+# Tầng giữa - lý do tồn tại:
+# Đo trên 451 văn bản thật, cấu hình 2 tầng cũ bỏ sót các văn bản như
+#   "Văn bản hợp nhất 10/2026/VBHN-NĐ-BNV về tuyển dụng, sử dụng và quản lý
+#    công chức"  -> chỉ 2đ, bị loại
+# vì STRONG_KW có cụm liền "tuyển dụng công chức" nhưng tiêu đề viết tách ra.
+# Thêm tầng 2đ + nâng ngưỡng lên 4: bắt đủ các văn bản bị sót, số văn bản
+# lọt qua chỉ tăng 32 -> 35, không kéo theo nhiễu.
+MEDIUM_KW = [
+    "công chức", "viên chức", "cán bộ", "tuyển dụng",
+    "lao động hợp đồng", "quản lý công chức", "sử dụng công chức",
+    "bố trí công chức", "chế độ đối với",
+    "đăng ký thuế", "quản lý thuế",
+]
+
 WEAK_KW = [
     "lao động", "việc làm", "nhân sự", "tuyển dụng", "công chức", "viên chức",
     "biên chế", "cán bộ", "nghỉ hưu", "chế độ", "chính sách", "lương",
@@ -98,11 +107,19 @@ WEAK_KW = [
 ]
 
 # ======================================================================
-# LỌC PHẠM VI ĐỊA PHƯƠNG
+# NHẬN DIỆN VĂN BẢN ĐỊA PHƯƠNG
 # ======================================================================
-# Feed TVPL có nhiều quyết định của UBND các tỉnh khác (Quảng Ninh,
-# Lâm Đồng...). Đo thực tế: 8/24 văn bản HR là cấp tỉnh không liên quan.
-# Chỉ giữ văn bản trung ương và của TP.HCM.
+# TRƯỚC ĐÂY: chặn cứng mọi văn bản UBND/HĐND tỉnh khác TP.HCM.
+# ĐO LẠI TRÊN DỮ LIỆU THẬT (451 văn bản, 17 ngày): cách đó loại 131 văn bản,
+# trong đó có 8 văn bản thật sự liên quan nghiệp vụ - ví dụ quyết định về
+# chế độ lao động hợp đồng, tiêu chuẩn chức danh viên chức.
+#
+# Sai lầm là lọc theo CẤP BAN HÀNH thay vì theo MỨC LIÊN QUAN. Bộ lọc từ
+# khóa vốn đã loại 123 văn bản còn lại (giá đất, quy hoạch...) mà không cần
+# chặn theo tỉnh.
+#
+# NAY: không chặn nữa. Chỉ ĐÁNH DẤU để xếp vào mục riêng ở cuối bản tin,
+# tránh văn bản địa phương lấn át văn bản trung ương.
 LOCAL_MARKERS = ["QĐ-UBND", "NQ-HĐND", "QĐ-HĐND", "KH-UBND", "CT-UBND"]
 LOCAL_KEEP = ["hồ chí minh", "tp.hcm", "tphcm", "thành phố hồ chí minh"]
 
@@ -123,7 +140,11 @@ GROUPS = [
     ]),
     ("THUẾ THU NHẬP CÁ NHÂN", [
         "thuế thu nhập cá nhân", "thuế tncn", "giảm trừ gia cảnh",
-        "quyết toán thuế", "thu nhập chịu thuế", "người nộp thuế", "thuế",
+        "quyết toán thuế", "thu nhập chịu thuế", "người nộp thuế",
+    # Công văn cơ quan thuế: feed có 80 công văn, 28 về thuế. Loại này không
+    # mang dấu QĐ-UBND nên không bị lọc theo tỉnh, chỉ cần trúng từ khóa.
+    "chính sách thuế", "miễn thuế", "giảm thuế", "hoàn thuế", "khấu trừ thuế",
+    "lệ phí trước bạ", "hóa đơn", "kê khai thuế", "mã số thuế", "thuế",
     ]),
     ("LAO ĐỘNG - HỢP ĐỒNG - CÔNG ĐOÀN", [
         "hợp đồng lao động", "bộ luật lao động", "công đoàn",
@@ -136,3 +157,6 @@ GROUPS = [
     ]),
 ]
 GROUP_OTHER = "KHÁC"
+
+# Mục riêng cho văn bản do UBND/HĐND tỉnh khác ban hành.
+GROUP_LOCAL = "VĂN BẢN ĐỊA PHƯƠNG KHÁC (tham khảo)"

@@ -31,8 +31,9 @@ from concurrent.futures import ThreadPoolExecutor
 
 import feedparser
 
-from feeds_quydinh import (FEEDS, STRONG_KW, WEAK_KW, SCORE_THRESHOLD,
-                           LOCAL_MARKERS, LOCAL_KEEP, GROUPS, GROUP_OTHER)
+from feeds_quydinh import (FEEDS, STRONG_KW, MEDIUM_KW, WEAK_KW, SCORE_THRESHOLD,
+                           LOCAL_MARKERS, LOCAL_KEEP, GROUPS, GROUP_OTHER,
+                           GROUP_LOCAL)
 
 # ----------------------------------------------------------------------
 # Cấu hình
@@ -73,6 +74,8 @@ MAX_AGE_DAYS = 45
 
 MAX_VANBAN_IN_MSG = 20   # số văn bản tối đa mỗi bản tin
 MAX_TIN_IN_MSG = 5       # tin ngành chỉ là phụ, chặn cứng để không lấn át
+MAX_LOCAL_IN_MSG = 6     # văn bản tỉnh khác: hữu ích để tham khảo nhưng
+                         # không được lấn át văn bản trung ương
 VN_TZ = timezone(timedelta(hours=7))
 
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -125,17 +128,6 @@ LOAI_MAP = {
     "van-ban-hop-nhat": "Văn bản hợp nhất",
 }
 CODE_MAP = {"ND": "NĐ", "QD": "QĐ", "CD": "CĐ", "TTG": "TTg", "TD": "TĐ"}
-
-def fix_broken_link(link, title, source):
-    """Feed BHXH trả về đường dẫn nội bộ FW.aspx?ItemID=N đã chết (Page not
-    found). Không dựng lại được địa chỉ thật vì còn thiếu mã chuyên mục.
-    Thay bằng liên kết tra cứu theo đúng tiêu đề, giới hạn trong tên miền BHXH
-    - bấm vào là ra bài gốc."""
-    if "FW.aspx" in link and "baohiemxahoi.gov.vn" in link:
-        return ("https://www.google.com/search?q="
-                + urllib.parse.quote(f'site:baohiemxahoi.gov.vn "{title}"'))
-    return link
-
 
 def parse_congbao_slug(link):
     """Công báo để TRỐNG thẻ <title>; số hiệu chỉ nằm trong URL.
@@ -221,8 +213,6 @@ def fetch_one(entry):
                 elif trichyeu:
                     title = trichyeu
 
-            link = fix_broken_link(link, title, source)
-
             out.append({
                 "title": title, "link": link, "cat": cat,
                 "source": source, "kind": kind, "pub": pub,
@@ -254,13 +244,16 @@ def collect():
 def score(item):
     t = item["title"].lower()
     s = 3 * sum(1 for k in STRONG_KW if k in t)
+    s += 2 * sum(1 for k in MEDIUM_KW if k in t)
     s += 1 * sum(1 for k in WEAK_KW if k in t)
     return s
 
 def is_other_province(title):
-    """Văn bản của UBND/HĐND tỉnh khác -> bỏ. Giữ trung ương và TP.HCM."""
+    """Văn bản do UBND/HĐND tỉnh KHÁC TP.HCM ban hành.
+    Chỉ dùng để ĐÁNH DẤU xếp vào mục riêng, KHÔNG loại bỏ - đo trên dữ liệu
+    thật cho thấy loại thẳng sẽ mất 8 văn bản liên quan nghiệp vụ."""
     if not any(m in title for m in LOCAL_MARKERS):
-        return False                      # không phải văn bản địa phương
+        return False
     low = title.lower()
     return not any(k in low for k in LOCAL_KEEP)
 
@@ -270,8 +263,9 @@ def sohieu_of(item):
 
 def filter_items(items, seen):
     kept = []
-    stats = {"english": 0, "province": 0, "lowscore": 0, "seen": 0, "cu": 0}
+    stats = {"english": 0, "lowscore": 0, "seen": 0, "cu": 0}
     titles_seen = set()
+    near_miss = []
     cutoff = datetime.now(timezone.utc) - timedelta(days=MAX_AGE_DAYS)
 
     for it in items:
@@ -284,11 +278,14 @@ def filter_items(items, seen):
         if RE_ENGLISH.match(it["title"]):
             stats["english"] += 1
             continue
-        if is_other_province(it["title"]):
-            stats["province"] += 1
-            continue
-        if score(it) < SCORE_THRESHOLD:
+        sc = score(it)
+        if sc < SCORE_THRESHOLD:
             stats["lowscore"] += 1
+            # Giữ lại các mục SUÝT đạt ngưỡng để in ra log. Đây là cách duy
+            # nhất đo được bộ lọc có bỏ sót gì không: nếu trong danh sách này
+            # có thứ đáng đọc -> ngưỡng đang quá chặt, cần thêm từ khóa.
+            if sc > 0 and it["kind"] == "vanban":
+                near_miss.append((sc, it["title"]))
             continue
         if it["link"] in seen:
             stats["seen"] += 1
@@ -299,17 +296,33 @@ def filter_items(items, seen):
         titles_seen.add(key)
         loai, sh = sohieu_of(it)
         it["loai"], it["sohieu"] = loai, sh
+        it["local"] = is_other_province(it["title"])
         kept.append(it)
 
     log(f"Đã lọc bỏ: {stats['cu']} quá cũ (>{MAX_AGE_DAYS} ngày) | "
         f"{stats['english']} bản tiếng Anh | "
-        f"{stats['province']} văn bản tỉnh khác | "
         f"{stats['lowscore']} không liên quan | {stats['seen']} đã gửi trước đó")
     nv = sum(1 for i in kept if i["kind"] == "vanban")
-    log(f"Còn lại {len(kept)} mục MỚI ({nv} văn bản, {len(kept)-nv} tin ngành).")
+    nl = sum(1 for i in kept if i["kind"] == "vanban" and i.get("local"))
+    log(f"Còn lại {len(kept)} mục MỚI ({nv} văn bản, trong đó {nl} của địa "
+        f"phương khác; {len(kept)-nv} tin ngành).")
+
+    # --- Bảng soát bỏ sót ---
+    # In các văn bản đạt 1-2 điểm (ngay dưới ngưỡng {SCORE_THRESHOLD}).
+    # Đọc danh sách này định kỳ: thấy tiêu đề nào đáng lẽ phải có trong bản
+    # tin thì bổ sung từ khóa vào STRONG_KW/WEAK_KW trong feeds_quydinh.py.
+    if near_miss:
+        near_miss.sort(reverse=True)
+        log(f"--- SOÁT BỎ SÓT: {len(near_miss)} văn bản đạt 1-{SCORE_THRESHOLD-1} "
+            f"điểm (dưới ngưỡng {SCORE_THRESHOLD}). {min(len(near_miss), 15)} cái điểm cao nhất:")
+        for sc, t in near_miss[:15]:
+            log(f"      [{sc}đ] {t[:105]}")
+        log("--- Hết bảng soát. Thấy cái nào đáng đọc -> thêm từ khóa.")
     return kept
 
 def group_of(item):
+    if item.get("local"):
+        return GROUP_LOCAL
     t = item["title"].lower()
     for name, kws in GROUPS:
         if any(k in t for k in kws):
@@ -329,27 +342,40 @@ def build_message(items):
              "=" * 34, ""]
 
     if vanban:
-        order = [g[0] for g in GROUPS] + [GROUP_OTHER]
+        order = [g[0] for g in GROUPS] + [GROUP_OTHER, GROUP_LOCAL]
         buckets = {g: [] for g in order}
         for it in vanban:
             buckets[group_of(it)].append(it)
         n = 0
+        n_local = 0
         for g in order:
             rows = buckets[g]
-            if not rows or n >= MAX_VANBAN_IN_MSG:
+            if not rows:
+                continue
+            is_local_group = (g == GROUP_LOCAL)
+            if not is_local_group and n >= MAX_VANBAN_IN_MSG:
                 continue
             lines += [g, ""]
             for it in rows:
-                if n >= MAX_VANBAN_IN_MSG:
+                # Hạn mức riêng: văn bản trung ương không bị văn bản tỉnh
+                # chiếm chỗ, và ngược lại.
+                if is_local_group:
+                    if n_local >= MAX_LOCAL_IN_MSG:
+                        break
+                    n_local += 1
+                elif n >= MAX_VANBAN_IN_MSG:
                     break
-                n += 1
-                lines.append(f"{n}. {it['title']}")
+                else:
+                    n += 1
+                stt = n_local if is_local_group else n
+                lines.append(f"{stt}. {it['title']}")
                 ngay = (f"   Ban hành: {it['pub'].astimezone(VN_TZ):%d/%m/%Y}"
                         if it["pub"] else "   ")
                 lines.append(f"{ngay}  |  Nguồn: {it['source']}")
                 lines += [f"   {it['link']}", ""]
-        if len(vanban) > n:
-            lines += [f"(còn {len(vanban) - n} văn bản khác chưa liệt kê)", ""]
+        shown = n + n_local
+        if len(vanban) > shown:
+            lines += [f"(còn {len(vanban) - shown} văn bản khác chưa liệt kê)", ""]
     else:
         lines += ["Không ghi nhận văn bản pháp luật mới trong đợt này.", ""]
 
