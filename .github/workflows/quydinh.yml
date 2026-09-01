@@ -39,12 +39,15 @@ jobs:
         env:
           TELEGRAM_TOKEN_QUYDINH: ${{ secrets.TELEGRAM_TOKEN_QUYDINH }}
           TELEGRAM_CHAT_ID:       ${{ secrets.TELEGRAM_CHAT_ID }}
-          # Tram trung chuyen qua Cloudflare Worker, de vuot chan IP cua TVPL.
-          # De trong 2 secret nay thi script goi thang - van chay, chi mat TVPL.
-          FEED_PROXY:             ${{ secrets.FEED_PROXY }}
-          FEED_PROXY_SECRET:      ${{ secrets.FEED_PROXY_SECRET }}
           FORCE_RUN:              ${{ inputs.force || github.event.client_payload.force }}
-          # Tram trung chuyen RSS qua Cloudflare Worker.
+          # Tram trung chuyen RSS qua Cloudflare Worker, de vuot chan IP cua TVPL.
+          # Thieu 2 bien nay thi script van chay, chi la goi thang va TVPL tra 403.
+          #
+          # FEED_PROXY de dang VARIABLE (tab Variables), KHONG phai Secret:
+          # dia chi Worker khong phai bi mat, va neu de Secret thi log che
+          # thanh *** -> khong chan doan duoc khi go sai ten mien.
+          FEED_PROXY:             ${{ vars.FEED_PROXY }}
+          FEED_PROXY_SECRET:      ${{ secrets.FEED_PROXY_SECRET }}
         run: python quydinh.py
 
       - name: Luu bo nho van ban da gui
