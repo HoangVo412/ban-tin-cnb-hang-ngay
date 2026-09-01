@@ -1,0 +1,64 @@
+name: Quy dinh HR
+
+on:
+  schedule:
+    # 00:30 UTC = 07:30 gio VN, T2-T6.
+    # LUU Y: GitHub dung cron chuan Linux (0=CN), KHAC Cloudflare (1=CN).
+    - cron: '30 0 * * 1-5'
+  workflow_dispatch:
+    inputs:
+      force:
+        description: 'Chay ngay, bao cao ca khi khong co van ban moi'
+        type: boolean
+        default: false
+  repository_dispatch:
+    types: [run-quydinh]
+
+concurrency:
+  group: bantin            # dung chung nhom voi cac workflow khac -> tranh dung git
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  quydinh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Cai thu vien
+        run: pip install -r requirements.txt
+
+      - name: Chay ban tin quy dinh
+        env:
+          TELEGRAM_TOKEN_QUYDINH: ${{ secrets.TELEGRAM_TOKEN_QUYDINH }}
+          TELEGRAM_CHAT_ID:       ${{ secrets.TELEGRAM_CHAT_ID }}
+          FORCE_RUN:              ${{ inputs.force || github.event.client_payload.force }}
+        run: python quydinh.py
+
+      - name: Luu bo nho van ban da gui
+        if: always()
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add seen_quydinh.json 2>/dev/null || true
+          if git diff --cached --quiet; then
+            echo "Khong co thay doi"
+            exit 0
+          fi
+          git commit -m "Quy dinh HR $(date -u +%F)"
+          for i in 1 2 3 4 5; do
+            if git push; then echo "Da luu bo nho"; exit 0; fi
+            echo "Push bi tu choi, dong bo lai roi thu lai (lan $i)"
+            git pull --rebase --autostash origin main || true
+            sleep 3
+          done
+          echo "CANH BAO: khong luu duoc bo nho sau 5 lan."
+          echo "Rui ro: lan chay sau co the gui lai van ban da gui."
+          exit 0
