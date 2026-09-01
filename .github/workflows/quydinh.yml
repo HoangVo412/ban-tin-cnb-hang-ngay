@@ -45,9 +45,6 @@ jobs:
           FEED_PROXY_SECRET:      ${{ secrets.FEED_PROXY_SECRET }}
           FORCE_RUN:              ${{ inputs.force || github.event.client_payload.force }}
           # Tram trung chuyen RSS qua Cloudflare Worker.
-          # Thieu 2 bien nay thi script van chay, chi la goi thang va TVPL 403.
-          FEED_PROXY:             ${{ secrets.FEED_PROXY }}
-          FEED_PROXY_SECRET:      ${{ secrets.FEED_PROXY_SECRET }}
         run: python quydinh.py
 
       - name: Luu bo nho van ban da gui
