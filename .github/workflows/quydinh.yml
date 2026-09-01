@@ -2,9 +2,12 @@ name: Quy dinh HR
 
 on:
   schedule:
-    # 00:30 UTC = 07:30 gio VN, T2-T6.
-    # LUU Y: GitHub dung cron chuan Linux (0=CN), KHAC Cloudflare (1=CN).
-    - cron: '30 0 * * 1-5'
+    # 00:30 UTC = 07:30 gio VN. Chay T2, T4, T6.
+    # GitHub dung cron chuan Linux: 0=CN, 1=T2, 3=T4, 5=T6.
+    # CANH BAO: Cloudflare dung quy uoc Quartz (1=CN) nen chuoi ben do KHAC:
+    #   GitHub     '30 0 * * 1,3,5'   = T2, T4, T6
+    #   Cloudflare '30 0 * * 2,4,6'   = T2, T4, T6
+    - cron: '30 0 * * 1,3,5'
   workflow_dispatch:
     inputs:
       force:
