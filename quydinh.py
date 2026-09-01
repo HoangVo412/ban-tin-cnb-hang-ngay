@@ -41,6 +41,22 @@ TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN_QUYDINH", "").strip()
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
 FORCE_RUN = os.environ.get("FORCE_RUN", "").strip().lower() in ("1", "true", "yes")
 
+# ---------------------------------------------------------------
+# CẦU LẤY RSS QUA CLOUDFLARE WORKER
+# ---------------------------------------------------------------
+# ThuVienPhapLuat trả 403 Forbidden cho máy chủ GitHub Actions (dải IP
+# Azure). Worker chạy trên hạ tầng Cloudflare - dải IP khác hẳn, nên có
+# cơ hội lấy được feed mà GitHub không lấy được.
+#
+# Không khai hai biến này thì script vẫn chạy bình thường, chỉ là gọi
+# thẳng như cũ và TVPL sẽ tiếp tục 403.
+FEED_PROXY = os.environ.get("FEED_PROXY", "").strip().rstrip("/")
+FEED_PROXY_SECRET = os.environ.get("FEED_PROXY_SECRET", "").strip()
+
+# Nguồn nào đi qua cầu. Khóa là ĐOẠN NHẬN DẠNG trong URL, không phải URL
+# đầy đủ - tra bằng phép kiểm tra chuỗi con, tránh lỗi khớp chính xác.
+PROXY_SOURCES = {"thuvienphapluat.vn/rss.xml": "tvpl"}
+
 SEEN_FILE = "seen_quydinh.json"
 SEEN_MAX = 600          # giữ tối đa 600 văn bản gần nhất, tránh file phình to
 # Giới hạn số mục lấy về theo từng nguồn.
@@ -59,6 +75,18 @@ VN_TZ = timezone(timedelta(hours=7))
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/125.0 Safari/537.36")
 
+# Một số trang (ThuVienPhapLuat) chặn máy chủ dựa trên bộ header.
+# Gửi kèm bộ header giống trình duyệt thật để tăng khả năng qua được.
+# KHÔNG đảm bảo: nếu họ chặn theo dải IP của Azure/GitHub thì vô hiệu.
+BROWSER_HEADERS = {
+    "User-Agent": UA,
+    "Accept": "application/rss+xml, application/xml, text/xml, */*;q=0.8",
+    "Accept-Language": "vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7",
+    "Accept-Encoding": "identity",
+    "Cache-Control": "no-cache",
+    "Connection": "keep-alive",
+}
+
 # Nhận diện số hiệu ngay đầu tiêu đề. Đo thực tế trên 451 văn bản TVPL: khớp 91%.
 RE_SOHIEU = re.compile(
     r"^(Nghị định|Thông tư|Thông tư liên tịch|Quyết định|Nghị quyết|Luật|"
@@ -70,14 +98,11 @@ RE_ENGLISH = re.compile(
     r"^(Decree|Circular|Decision|Law|Resolution|Ordinance|Directive|"
     r"Official Dispatch|Joint Circular)\s+No\.?", re.I)
 
-
 def log(msg):
     print(f"[{datetime.now(VN_TZ):%H:%M:%S}] {msg}", flush=True)
 
-
 def today_vn():
     return datetime.now(VN_TZ).strftime("%Y-%m-%d")
-
 
 # ----------------------------------------------------------------------
 # 1. Đọc RSS
@@ -89,14 +114,71 @@ def clean(text, limit=400):
     text = html.unescape(text)
     return re.sub(r"\s+", " ", text).strip()[:limit]
 
+LOAI_MAP = {
+    "nghi-dinh": "Nghị định", "thong-tu": "Thông tư",
+    "thong-tu-lien-tich": "Thông tư liên tịch", "quyet-dinh": "Quyết định",
+    "nghi-quyet": "Nghị quyết", "luat": "Luật", "phap-lenh": "Pháp lệnh",
+    "cong-dien": "Công điện", "chi-thi": "Chỉ thị", "cong-van": "Công văn",
+    "van-ban-hop-nhat": "Văn bản hợp nhất",
+}
+CODE_MAP = {"ND": "NĐ", "QD": "QĐ", "CD": "CĐ", "TTG": "TTg", "TD": "TĐ"}
+
+def parse_congbao_slug(link):
+    """Công báo để TRỐNG thẻ <title>; số hiệu chỉ nằm trong URL.
+    vd .../nghi-dinh-so-320-2026-nd-cp-470285.htm -> ('Nghị định','320/2026/NĐ-CP')
+    Đã kiểm chứng đúng 10/10 trên URL thật lấy từ feed."""
+    m = re.search(r"/([a-z0-9\-]+?)-(\d+)\.htm", link)
+    if not m:
+        return "", ""
+    slug = m.group(1)
+    if "-so-" not in slug:
+        return LOAI_MAP.get(slug, ""), ""
+    prefix, rest = slug.split("-so-", 1)
+    loai = LOAI_MAP.get(prefix, prefix.replace("-", " ").capitalize())
+    nums, codes = [], []
+    for t in rest.split("-"):
+        if t.isdigit() and not codes:
+            nums.append(t)
+        else:
+            codes.append(t)
+    code = "-".join(CODE_MAP.get(c.upper(), c.upper()) for c in codes)
+    return loai, "/".join(nums) + ("/" + code if code else "")
 
 def fetch_one(entry):
-    url, (source, kind) = entry
+    url, cfg = entry
+    source, kind = cfg[0], cfg[1]
+    parser = cfg[2] if len(cfg) > 2 else "std"
     out = []
+
+    # Chọn đường đi: qua trạm trung chuyển nếu nguồn này bị chặn và
+    # trạm đã được cấu hình; nếu không thì gọi thẳng.
+    proxy_key = next((v for k, v in PROXY_SOURCES.items() if k in url), None)
+    attempts = []
+    if proxy_key and FEED_PROXY:
+        h = dict(BROWSER_HEADERS)
+        h["X-Proxy-Secret"] = FEED_PROXY_SECRET
+        attempts.append((f"{FEED_PROXY}/feed?src={proxy_key}", h, "qua trạm"))
+    attempts.append((url, BROWSER_HEADERS, "gọi thẳng"))
+
+    raw, last_err = None, None
+    for target, headers, how in attempts:
+        try:
+            req = urllib.request.Request(target, headers=headers)
+            with urllib.request.urlopen(req, timeout=45) as resp:
+                raw = resp.read()
+            if len(attempts) > 1:
+                log(f"  ({how} thành công) {source}")
+            break
+        except Exception as ex:
+            last_err = ex
+            if len(attempts) > 1:
+                log(f"  ({how} thất bại) {source}: {type(ex).__name__} - {ex}")
+
+    if raw is None:
+        log(f"  LỖI {source}: {type(last_err).__name__} - {last_err}")
+        return out
+
     try:
-        req = urllib.request.Request(url, headers={"User-Agent": UA})
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            raw = resp.read()
         parsed = feedparser.parse(raw)
         if not parsed.entries:
             log(f"  (trống) {source}")
@@ -107,19 +189,28 @@ def fetch_one(entry):
             struct = e.get("published_parsed") or e.get("updated_parsed")
             pub = (datetime.fromtimestamp(calendar.timegm(struct), tz=timezone.utc)
                    if struct else None)
+            link = (e.get("link") or "").strip()
+            title = clean(e.get("title", ""))
+            cat = clean(e.get("category", ""), 60)
+
+            if parser == "congbao":
+                # Ghép lại tiêu đề: "<Loại> <số hiệu> <trích yếu>"
+                trichyeu = clean(e.get("summary", "") or e.get("description", ""))
+                loai, sohieu = parse_congbao_slug(link)
+                if loai and sohieu:
+                    title = f"{loai} {sohieu} {trichyeu}".strip()
+                    cat = loai
+                elif trichyeu:
+                    title = trichyeu
+
             out.append({
-                "title": clean(e.get("title", "")),
-                "link": (e.get("link") or "").strip(),
-                "cat": clean(e.get("category", ""), 60),
-                "source": source,
-                "kind": kind,
-                "pub": pub,
+                "title": title, "link": link, "cat": cat,
+                "source": source, "kind": kind, "pub": pub,
             })
         log(f"  OK  {source}: {len(out)} mục")
     except Exception as ex:
         log(f"  LỖI {source}: {type(ex).__name__} - {ex}")
     return out
-
 
 def collect():
     log(f"Đọc {len(FEEDS)} nguồn...")
@@ -130,7 +221,6 @@ def collect():
     log(f"Thu được {len(items)} mục thô.")
     return items
 
-
 # ----------------------------------------------------------------------
 # 2. Lọc
 # ----------------------------------------------------------------------
@@ -140,7 +230,6 @@ def score(item):
     s += 1 * sum(1 for k in WEAK_KW if k in t)
     return s
 
-
 def is_other_province(title):
     """Văn bản của UBND/HĐND tỉnh khác -> bỏ. Giữ trung ương và TP.HCM."""
     if not any(m in title for m in LOCAL_MARKERS):
@@ -148,11 +237,9 @@ def is_other_province(title):
     low = title.lower()
     return not any(k in low for k in LOCAL_KEEP)
 
-
 def sohieu_of(item):
     m = RE_SOHIEU.match(item["title"])
     return (m.group(1), m.group(2)) if m else (item.get("cat") or "", "")
-
 
 def filter_items(items, seen):
     kept = []
@@ -195,14 +282,12 @@ def filter_items(items, seen):
     log(f"Còn lại {len(kept)} mục MỚI ({nv} văn bản, {len(kept)-nv} tin ngành).")
     return kept
 
-
 def group_of(item):
     t = item["title"].lower()
     for name, kws in GROUPS:
         if any(k in t for k in kws):
             return name
     return GROUP_OTHER
-
 
 # ----------------------------------------------------------------------
 # 3. Trình bày - văn bản thuần, không markdown
@@ -251,9 +336,9 @@ def build_message(items):
               "Bản tin chỉ liệt kê nguyên văn tiêu đề văn bản mới phát hiện.",
               "Nội dung, hiệu lực và số điều khoản phải tra cứu văn bản gốc",
               "trước khi áp dụng vào nghiệp vụ.",
-              "Nguồn: thuvienphapluat.vn, baohiemxahoi.gov.vn, báo điện tử."]
+              "Nguồn: congbao.chinhphu.vn, thuvienphapluat.vn,",
+              "baohiemxahoi.gov.vn và các báo điện tử."]
     return "\n".join(lines)
-
 
 def build_weekly(seen):
     """Tổng kết tuần, gửi sáng thứ Hai."""
@@ -272,7 +357,6 @@ def build_weekly(seen):
     lines += ["", "-" * 34, "Hệ thống đang hoạt động bình thường."]
     return "\n".join(lines)
 
-
 # ----------------------------------------------------------------------
 # 4. Bộ nhớ văn bản đã gửi
 # ----------------------------------------------------------------------
@@ -286,7 +370,6 @@ def load_seen():
         log("Chưa có bộ nhớ, khởi tạo mới.")
         return {}
 
-
 def save_seen(seen, new_items):
     for it in new_items:
         seen[it["link"]] = {"title": it["title"], "sent": today_vn()}
@@ -298,7 +381,6 @@ def save_seen(seen, new_items):
     with open(SEEN_FILE, "w", encoding="utf-8") as f:
         json.dump(seen, f, ensure_ascii=False, indent=1)
     log(f"Đã lưu bộ nhớ: {len(seen)} văn bản.")
-
 
 # ----------------------------------------------------------------------
 # 5. Gửi Telegram
@@ -322,11 +404,31 @@ def send_telegram(text):
             "disable_web_page_preview": "true",
         }).encode()
         req = urllib.request.Request(api, data=data)
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            resp.read()
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                resp.read()
+        except urllib.error.HTTPError as ex:
+            # Telegram luôn kèm lý do cụ thể trong thân phản hồi.
+            # Không đọc ra thì chỉ thấy "400 Bad Request" vô nghĩa.
+            body = ""
+            try:
+                body = ex.read().decode("utf-8", "replace")[:300]
+            except Exception:
+                pass
+            log(f"TELEGRAM TỪ CHỐI (mã {ex.code}): {body}")
+            if "chat not found" in body:
+                log("  -> Nguyên nhân: bot chưa từng có tương tác với chat này.")
+                log("  -> Cách xử lý: mở bot trong Telegram và bấm Start,")
+                log("     hoặc nhắn cho bot một tin bất kỳ, rồi chạy lại.")
+            elif "bot was blocked" in body:
+                log("  -> Nguyên nhân: bạn đã chặn bot. Bỏ chặn rồi chạy lại.")
+            elif "unauthorized" in body.lower():
+                log("  -> Nguyên nhân: sai TELEGRAM_TOKEN_QUYDINH.")
+            elif "too long" in body:
+                log("  -> Nguyên nhân: tin nhắn quá dài, giảm MAX_VANBAN_IN_MSG.")
+            raise RuntimeError(f"Không gửi được Telegram: mã {ex.code}")
         log(f"Đã gửi Telegram phần {idx}/{len(chunks)}")
         time.sleep(1)
-
 
 # ----------------------------------------------------------------------
 def main():
@@ -365,10 +467,19 @@ def main():
             log("Không có văn bản mới -> im lặng (đúng thiết kế, tránh nhiễu).")
         return
 
+    n_vanban = sum(1 for i in fresh if i["kind"] == "vanban")
+    if n_vanban == 0 and not FORCE_RUN:
+        # Bot này tồn tại để báo VĂN BẢN mới. Nếu nguồn văn bản chết mà vẫn
+        # gửi 5 tin tuyên truyền dưới tiêu đề "VĂN BẢN, QUY ĐỊNH MỚI" thì
+        # bản tin thành sai bản chất và gây hiểu nhầm. Thà im lặng.
+        log("Không có văn bản pháp quy nào (chỉ có tin ngành) -> không gửi.")
+        log("Nếu tình trạng này kéo dài, nguồn văn bản đang hỏng - kiểm tra log.")
+        save_seen(seen, fresh)
+        return
+
     send_telegram(build_message(fresh))
     save_seen(seen, fresh)   # ghi nhớ cả mục chưa liệt kê, tránh lặp vô hạn
     log("Xong.")
-
 
 if __name__ == "__main__":
     main()

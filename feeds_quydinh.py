@@ -14,33 +14,45 @@ có thể bị dùng thật. Không sinh chữ mới thì không thể bịa.
 # kind = "tin"    -> tin tức ngành, không có số hiệu
 
 FEEDS = {
-    # ---------- XƯƠNG SỐNG ----------
+    # ---------- NGUỒN VĂN BẢN CHÍNH ----------
+    # Khôi phục sau khi ThuVienPhapLuat chặn máy chủ GitHub (403 Forbidden,
+    # xác nhận trong log 01/09/2026). Đây là nguồn văn bản pháp quy DUY NHẤT
+    # đã kiểm chứng là tải được từ máy chủ.
+    # Đặc thù: thẻ <title> để TRỐNG, trích yếu nằm trong <description>,
+    # số hiệu chỉ có trong URL -> cần bộ tách riêng (parser "congbao").
+    # Đánh đổi: Công báo đăng chậm hơn ban hành khoảng 2 tuần.
+    "https://congbao.chinhphu.vn/cac-van-ban-moi-ban-hanh.rss":
+        ("Công báo Chính phủ", "vanban", "congbao"),
+
+    # ---------- XƯƠNG SỐNG (đang bị chặn) ----------
+    # 403 Forbidden từ máy chủ GitHub. Vẫn giữ trong danh sách và thử mỗi lần
+    # với bộ header giống trình duyệt - nếu TVPL nới chặn thì tự dùng lại.
     # Đã kiểm chứng 01/09/2026: 451 văn bản, phủ 17 ngày, ~27 văn bản/ngày.
     # Tiêu đề chứa sẵn số hiệu, có thẻ <category> phân loại. Chất lượng cao nhất.
     # RỦI RO: TVPL có cơ chế chống bot. Nếu runner GitHub bị chặn (403),
     # script tự bỏ qua và chạy tiếp bằng các nguồn còn lại.
-    "https://thuvienphapluat.vn/rss.xml": ("ThuVienPhapLuat", "vanban"),
+    "https://thuvienphapluat.vn/rss.xml": ("ThuVienPhapLuat", "vanban", "std"),
 
     # ---------- BỔ SUNG CHUYÊN NGÀNH ----------
     # Đã kiểm chứng 01/09/2026: feed sống, tiêu đề đầy đủ.
     # Đây là TIN NGÀNH, không phải văn bản -> không có số hiệu.
     "https://baohiemxahoi.gov.vn/pages/chi-tiet-kenh-rss.aspx?ItemID=2":
-        ("BHXH Việt Nam - Tin tức", "tin"),
+        ("BHXH Việt Nam - Tin tức", "tin", "std"),
     "https://baohiemxahoi.gov.vn/pages/chi-tiet-kenh-rss.aspx?ItemID=3":
-        ("BHXH Việt Nam - Hoạt động ngành", "tin"),
+        ("BHXH Việt Nam - Hoạt động ngành", "tin", "std"),
     "https://baohiemxahoi.gov.vn/pages/chi-tiet-kenh-rss.aspx?ItemID=4":
-        ("BHXH Việt Nam - Luật BHXH, BHYT", "tin"),
+        ("BHXH Việt Nam - Luật BHXH, BHYT", "tin", "std"),
     "https://baohiemxahoi.gov.vn/pages/chi-tiet-kenh-rss.aspx?ItemID=8":
-        ("BHXH Việt Nam - Ốm đau, thai sản", "tin"),
+        ("BHXH Việt Nam - Ốm đau, thai sản", "tin", "std"),
     "https://baohiemxahoi.gov.vn/pages/chi-tiet-kenh-rss.aspx?ItemID=10":
-        ("BHXH Việt Nam - Cải cách TTHC", "tin"),
+        ("BHXH Việt Nam - Cải cách TTHC", "tin", "std"),
 
     # ---------- BÁO CHÍ (bắt nhanh, kém chính xác hơn) ----------
-    "https://vnexpress.net/rss/phap-luat.rss":  ("VnExpress - Pháp luật", "tin"),
+    "https://vnexpress.net/rss/phap-luat.rss":  ("VnExpress - Pháp luật", "tin", "std"),
     "https://tuoitre.vn/nld/rss/nld/lao-dong/chinh-sach.rss":
-        ("NLĐ - Lao động/Chính sách", "tin"),
+        ("NLĐ - Lao động/Chính sách", "tin", "std"),
     "https://tuoitre.vn/nld/rss/nld/lao-dong/an-sinh-xa-hoi.rss":
-        ("NLĐ - Lao động/An sinh xã hội", "tin"),
+        ("NLĐ - Lao động/An sinh xã hội", "tin", "std"),
 
     # ---------- ĐÃ LOẠI ----------
     # Cục Thuế (gdt.gov.vn/wps/wcm/...): feed hỏng, mọi mục đều có tiêu đề
