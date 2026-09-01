@@ -64,6 +64,9 @@ SEEN_MAX = 600          # giữ tối đa 600 văn bản gần nhất, tránh fi
 # lên feed) nên phải lấy hết; cắt 60 mục đầu sẽ mất gần như toàn bộ văn bản HR.
 MAX_PER_FEED_DEFAULT = 40
 MAX_PER_FEED_TVPL = 600
+# Công báo cũng là nguồn văn bản -> lấy rộng hơn nguồn tin thường.
+# Log 01/09 cho thấy nó bị cắt còn 40 mục, trong khi feed có nhiều hơn.
+MAX_PER_FEED_CONGBAO = 150
 
 # Bỏ mục quá cũ. Feed BHXH lẫn cả tin từ 2017, 2021 xen giữa tin 2026.
 MAX_AGE_DAYS = 45
@@ -122,6 +125,17 @@ LOAI_MAP = {
     "van-ban-hop-nhat": "Văn bản hợp nhất",
 }
 CODE_MAP = {"ND": "NĐ", "QD": "QĐ", "CD": "CĐ", "TTG": "TTg", "TD": "TĐ"}
+
+def fix_broken_link(link, title, source):
+    """Feed BHXH trả về đường dẫn nội bộ FW.aspx?ItemID=N đã chết (Page not
+    found). Không dựng lại được địa chỉ thật vì còn thiếu mã chuyên mục.
+    Thay bằng liên kết tra cứu theo đúng tiêu đề, giới hạn trong tên miền BHXH
+    - bấm vào là ra bài gốc."""
+    if "FW.aspx" in link and "baohiemxahoi.gov.vn" in link:
+        return ("https://www.google.com/search?q="
+                + urllib.parse.quote(f'site:baohiemxahoi.gov.vn "{title}"'))
+    return link
+
 
 def parse_congbao_slug(link):
     """Công báo để TRỐNG thẻ <title>; số hiệu chỉ nằm trong URL.
@@ -183,8 +197,12 @@ def fetch_one(entry):
         if not parsed.entries:
             log(f"  (trống) {source}")
             return out
-        limit = (MAX_PER_FEED_TVPL if "thuvienphapluat" in url
-                 else MAX_PER_FEED_DEFAULT)
+        if "thuvienphapluat" in url:
+            limit = MAX_PER_FEED_TVPL
+        elif "congbao" in url:
+            limit = MAX_PER_FEED_CONGBAO
+        else:
+            limit = MAX_PER_FEED_DEFAULT
         for e in parsed.entries[:limit]:
             struct = e.get("published_parsed") or e.get("updated_parsed")
             pub = (datetime.fromtimestamp(calendar.timegm(struct), tz=timezone.utc)
@@ -203,6 +221,8 @@ def fetch_one(entry):
                 elif trichyeu:
                     title = trichyeu
 
+            link = fix_broken_link(link, title, source)
+
             out.append({
                 "title": title, "link": link, "cat": cat,
                 "source": source, "kind": kind, "pub": pub,
@@ -213,6 +233,13 @@ def fetch_one(entry):
     return out
 
 def collect():
+    # In cấu hình trạm ra log. FEED_PROXY để dạng Variable (không phải Secret)
+    # nên giá trị hiện rõ - sai chính tả tên miền là thấy ngay.
+    if FEED_PROXY:
+        log(f"Trạm lấy RSS: {FEED_PROXY}  | mã bí mật: "
+            f"{'có, ' + str(len(FEED_PROXY_SECRET)) + ' ký tự' if FEED_PROXY_SECRET else 'CHƯA CÓ'}")
+    else:
+        log("Trạm lấy RSS: CHƯA KHAI (FEED_PROXY rỗng) -> mọi nguồn gọi thẳng.")
     log(f"Đọc {len(FEEDS)} nguồn...")
     items = []
     with ThreadPoolExecutor(max_workers=6) as pool:
