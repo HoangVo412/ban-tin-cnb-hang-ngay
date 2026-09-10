@@ -151,15 +151,33 @@ def _us_repl(m):
     return m.group(1) + iso.encode()
 
 
+# (3) Khoảng trắng Unicode. tuoitre.vn ngăn cách giây và AM/PM bằng
+#     U+202F NARROW NO-BREAK SPACE (bytes \xe2\x80\xaf), KHÔNG phải dấu cách
+#     thường. Trong regex kiểu bytes, "\s" chỉ khớp khoảng trắng ASCII nên
+#     mọi mẫu ở trên đều trượt. Đây là lý do bản vá (2) không ăn ở lần thử
+#     đầu - nhìn log chỉ thấy "9/10/2026 8:08:00 AM", tưởng là dấu cách.
+#     Quy hết về dấu cách thường trước khi làm gì khác.
+_RE_KHOANG_TRANG_LA = re.compile(
+    rb"\xc2\xa0"                 # U+00A0 no-break space
+    rb"|\xe2\x80[\x80-\x8a\xaf]"  # U+2000..U+200A, U+202F
+    rb"|\xe2\x81\x9f"             # U+205F medium mathematical space
+    rb"|\xe3\x80\x80")            # U+3000 ideographic space
+
+
 def fix_short_tz(raw):
     """Chuẩn hóa mọi biến thể ngày về dạng feedparser đọc được.
 
-    'GMT+7' / '+07' / 'GMT+07:00'  -> '+0700'
-    '9/1/2026 10:52:00 AM'         -> '2026-09-01T10:52:00+07:00'
+    khoảng trắng Unicode         -> dấu cách thường
+    'GMT+7' / '+07' / 'GMT+07:00' -> '+0700'
+    '9/1/2026 10:52:00 AM'        -> '2026-09-01T10:52:00+07:00'
     Chuỗi đã đúng chuẩn ('+0700', '-0500', 'GMT') giữ nguyên.
     """
-    raw = _RE_USDATE.sub(_us_repl, raw)
-    return _RE_TZ_FIX.sub(_tz_repl, raw)
+    raw = _RE_KHOANG_TRANG_LA.sub(b" ", raw)
+    # TZ_FIX chạy TRƯỚC, nếu không nó sẽ đụng vào chuỗi ISO "+07:00" mà
+    # USDATE vừa sinh ra và tách thành "T08:08:00 +0700" (vẫn đọc được
+    # nhưng bẩn). Ngày kiểu Mỹ không có dấu +/- nên TZ_FIX không chạm tới.
+    raw = _RE_TZ_FIX.sub(_tz_repl, raw)
+    return _RE_USDATE.sub(_us_repl, raw)
 
 
 # --- Chẩn đoán: in ra chuỗi ngày THÔ khi không parse được ---
