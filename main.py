@@ -86,17 +86,25 @@ def clean(text, limit=180):
 
 
 # ----------------------------------------------------------------------
-# VÁ LỖI ĐỊNH DẠNG MÚI GIỜ  (nguyên nhân gốc của tin cũ)
+# CHUẨN HÓA NGÀY THÁNG TRONG XML THÔ  (nguyên nhân gốc của tin cũ)
 # ----------------------------------------------------------------------
-# Hai họ nguồn ghi múi giờ sai chuẩn RFC 822, feedparser trả None mà
-# KHÔNG báo lỗi (đo thực tế 10/09/2026):
-#   tuoitre.vn/nld/...  ->  "Fri, 26 Jun 2026 03:08:00 +07"
-#   tuoitre.vn/...      ->  "Sun, 14 Jun 2026 18:23:42 GMT+7"
-# Chuẩn đòi "+0700". Kết hợp với bộ lọc cũ (giữ mục không có ngày) thì
-# toàn bộ tin của 2 họ nguồn này lọt cửa sổ 26h bất kể cũ bao nhiêu.
+# Ba họ nguồn ghi ngày sai chuẩn RFC 822. feedparser trả None mà KHÔNG báo
+# lỗi, nên mọi mục của nguồn đó mất ngày và lọt qua bộ lọc thời gian.
+# Đo thực tế 10/09/2026:
+#   tuoitre.vn/nld/...   "Fri, 26 Jun 2026 03:08:00 +07"      -> thiếu 2 số phút
+#   tuoitre.vn/rss/...   "Sun, 14 Jun 2026 18:23:42 GMT+7"    -> "GMT+7" không hợp lệ
+#   tuoitre.vn/<mục>.rss "9/1/2026 10:52:00 AM"               -> định dạng Mỹ, không múi giờ
 # Vá ngay trên chuỗi XML thô, trước khi giao cho feedparser.
+
+# (1) Múi giờ rút gọn / có tiền tố GMT  ->  +0700
 _RE_TZ_FIX = re.compile(
     rb"(\d{2}:\d{2}:\d{2})\s*(?:GMT\s*)?([+-])(\d{1,2})(?::?(\d{2}))?(?![\d:])")
+
+# (2) Ngày kiểu Mỹ M/D/YYYY h:mm:ss AM|PM. Chỉ thay TRONG thẻ ngày, không
+#     đụng tới nội dung bài viết (mô tả có thể chứa chuỗi ngày tương tự).
+_RE_USDATE = re.compile(
+    rb"(<\s*(?:pubDate|lastBuildDate|dc:date)\s*>\s*(?:<!\[CDATA\[\s*)?)"
+    rb"(\d{1,2})/(\d{1,2})/(\d{4})\s+(\d{1,2}):(\d{2}):(\d{2})\s*([AaPp])[Mm]")
 
 
 def _tz_repl(m):
@@ -107,12 +115,27 @@ def _tz_repl(m):
     return m.group(1) + b" " + m.group(2) + gio + phut
 
 
-def fix_short_tz(raw):
-    """Chuẩn hóa mọi biến thể múi giờ về dạng +0700.
+def _us_repl(m):
+    thang, ngay, nam = int(m.group(2)), int(m.group(3)), int(m.group(4))
+    gio, phut, giay = int(m.group(5)), int(m.group(6)), int(m.group(7))
+    chieu = m.group(8) in (b"P", b"p")
+    if chieu and gio != 12:
+        gio += 12
+    if not chieu and gio == 12:
+        gio = 0
+    # Nguồn ghi giờ Việt Nam (lastBuildDate của chính feed ghi GMT+7).
+    iso = f"{nam:04d}-{thang:02d}-{ngay:02d}T{gio:02d}:{phut:02d}:{giay:02d}+07:00"
+    return m.group(1) + iso.encode()
 
-    'GMT+7' -> '+0700' | '+07' -> '+0700' | 'GMT+07:00' -> '+0700'
-    '+0700' và '-0500' giữ nguyên. 'GMT' (không dấu) không đụng tới.
+
+def fix_short_tz(raw):
+    """Chuẩn hóa mọi biến thể ngày về dạng feedparser đọc được.
+
+    'GMT+7' / '+07' / 'GMT+07:00'  -> '+0700'
+    '9/1/2026 10:52:00 AM'         -> '2026-09-01T10:52:00+07:00'
+    Chuỗi đã đúng chuẩn ('+0700', '-0500', 'GMT') giữ nguyên.
     """
+    raw = _RE_USDATE.sub(_us_repl, raw)
     return _RE_TZ_FIX.sub(_tz_repl, raw)
 
 
