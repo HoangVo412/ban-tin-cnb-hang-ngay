@@ -1,0 +1,31 @@
+name: Kiem tra nguon RSS
+
+# Chỉ chạy tay. Không đặt lịch - đây là công cụ chẩn đoán, không phải bản tin.
+on:
+  workflow_dispatch:
+    inputs:
+      ungvien:
+        description: 'Kiem tra ca nhom nguon ung vien? (yes/no)'
+        required: false
+        default: 'yes'
+
+jobs:
+  kiemtra:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Cai dat thu vien
+        run: pip install feedparser
+
+      - name: Chay chan doan
+        run: |
+          if [ "${{ github.event.inputs.ungvien }}" = "yes" ]; then
+            python kiem_tra_nguon.py ungvien
+          else
+            python kiem_tra_nguon.py
+          fi
