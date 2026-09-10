@@ -31,31 +31,50 @@ DEAD_DAYS = 4
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/125.0 Safari/537.36")
 
-# "26 Jun 2026 03:08:00 +07"  ->  "... +0700"
-_RE_TZ_SHORT = re.compile(rb"(\d{2}:\d{2}:\d{2}\s*[+-]\d{2})(\s*<)")
+# Chuẩn hóa múi giờ sai chuẩn RFC 822 -> "+0700".
+#   tuoitre.vn/nld ghi "+07"   |   tuoitre.vn ghi "GMT+7"
+# feedparser gặp hai dạng này thì trả None mà không báo lỗi.
+_RE_TZ_FIX = re.compile(
+    rb"(\d{2}:\d{2}:\d{2})\s*(?:GMT\s*)?([+-])(\d{1,2})(?::?(\d{2}))?(?![\d:])")
+
+
+def _tz_repl(m):
+    gio = m.group(3)
+    if len(gio) == 1:
+        gio = b"0" + gio
+    phut = m.group(4) or b"00"
+    return m.group(1) + b" " + m.group(2) + gio + phut
 
 
 def fix_short_tz(raw):
-    return _RE_TZ_SHORT.sub(rb"\g<1>00\g<2>", raw)
+    return _RE_TZ_FIX.sub(_tz_repl, raw)
 
 
-# Nguồn ứng viên thay cho 11 kênh NLĐ đã chết.
-# [??] = SUY TỪ QUY LUẬT URL, CHƯA KIỂM CHỨNG. Chạy script rồi giữ cái nào sống.
+# ĐỢT 2 - ứng viên bổ sung cho mảng LAO ĐỘNG / CHÍNH SÁCH, hiện đang mỏng
+# sau khi gỡ 11 kênh NLĐ.
+# [??] = SUY TỪ QUY LUẬT URL, CHƯA KIỂM CHỨNG. Chạy rồi giữ cái nào "ok".
+# Các URL đã ĐO ngày 10/09/2026 và LOẠI, đừng thử lại:
+#   laodong.vn/rss/*        -> feed rỗng
+#   baochinhphu.vn/rss/*    -> 404
+#   dantri.com.vn/rss/an-sinh.rss, /xa-hoi.rss, /suc-manh-so.rss -> đứng yên
+#   vietnamnet.vn/rss/kinh-doanh.rss -> đứng yên từ 08/08
 UNG_VIEN = {
-    "https://laodong.vn/rss/cong-doan.rss":            "Lao Động - Công đoàn [??]",
-    "https://laodong.vn/rss/xa-hoi.rss":               "Lao Động - Xã hội [??]",
-    "https://laodong.vn/rss/thoi-su.rss":              "Lao Động - Thời sự [??]",
-    "https://laodong.vn/rss/kinh-doanh.rss":           "Lao Động - Kinh doanh [??]",
-    "https://laodong.vn/rss/cong-nghe.rss":            "Lao Động - Công nghệ [??]",
-    "https://dantri.com.vn/rss/lao-dong-viec-lam.rss": "Dân Trí - LĐ Việc làm [??]",
-    "https://dantri.com.vn/rss/an-sinh.rss":           "Dân Trí - An sinh [??]",
-    "https://dantri.com.vn/rss/phap-luat.rss":         "Dân Trí - Pháp luật [??]",
-    "https://vietnamnet.vn/rss/kinh-doanh.rss":        "VietnamNet - Kinh doanh [??]",
-    "https://vietnamnet.vn/rss/thoi-su.rss":           "VietnamNet - Thời sự [??]",
-    "https://baochinhphu.vn/rss/chinh-sach-moi.rss":   "Báo CP - Chính sách [??]",
-    "https://baochinhphu.vn/rss/kinh-te.rss":          "Báo CP - Kinh tế [??]",
-    "https://thanhnien.vn/rss/doi-song.rss":           "Thanh Niên - Đời sống [??]",
-    "https://cafef.vn/thi-truong-chung-khoan.rss":     "CafeF - Chứng khoán [??]",
+    "https://laodong.vn/rss/home.rss":                 "Lao Động - Trang chủ [??]",
+    "https://laodong.vn/rss/cong-doan-1.rss":          "Lao Động - Công đoàn v2 [??]",
+    "https://baochinhphu.vn/rss/home.rss":             "Báo CP - Trang chủ [??]",
+    "https://baochinhphu.vn/rss/chinhsach-cuocsong.rss": "Báo CP - Chính sách CS [??]",
+    "https://vietnamnet.vn/rss/doi-song.rss":          "VietnamNet - Đời sống [??]",
+    "https://vietnamnet.vn/rss/phap-luat.rss":         "VietnamNet - Pháp luật [??]",
+    "https://vietnamnet.vn/rss/kinh-doanh-tai-chinh.rss": "VietnamNet - KD Tài chính [??]",
+    "https://tienphong.vn/rss/xa-hoi-2.rss":           "Tiền Phong - Xã hội [??]",
+    "https://tienphong.vn/rss/kinh-te-3.rss":          "Tiền Phong - Kinh tế [??]",
+    "https://www.vietnamplus.vn/rss/xahoi.rss":        "VietnamPlus - Xã hội [??]",
+    "https://vov.vn/rss/xa-hoi-15.rss":                "VOV - Xã hội [??]",
+    "https://vtcnews.vn/rss/kinh-te.rss":              "VTC News - Kinh tế [??]",
+    "https://cafef.vn/kinh-te-vi-mo-dau-tu.rss":       "CafeF - Vĩ mô v2 [??]",
+    "https://thanhnien.vn/rss/tai-chinh-kinh-doanh.rss": "Thanh Niên - TC Kinh doanh [??]",
+    "https://tuoitre.vn/xa-hoi.rss":                   "Tuổi Trẻ - Xã hội [??]",
+    "https://tuoitre.vn/gia-that.rss":                 "Tuổi Trẻ - Giả thật [??]",
 }
 
 
