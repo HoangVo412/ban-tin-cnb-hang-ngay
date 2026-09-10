@@ -59,6 +59,10 @@ FEED_PROXY_SECRET = os.environ.get("FEED_PROXY_SECRET", "").strip()
 PROXY_SOURCES = {"thuvienphapluat.vn/rss.xml": "tvpl"}
 
 SEEN_FILE = "seen_quydinh.json"
+# Ghi dấu ngày đã gửi. Có HAI lịch cùng bắn (Cloudflare repository_dispatch
+# chạy đúng giờ + GitHub schedule dự phòng chạy trễ). Từ khi bot báo cả khi
+# không có văn bản mới, thiếu file này sẽ nhận 2 tin nhắn mỗi ngày.
+LAST_RUN_FILE = "last_run_quydinh.txt"
 SEEN_MAX = 600          # giữ tối đa 600 văn bản gần nhất, tránh file phình to
 # Giới hạn số mục lấy về theo từng nguồn.
 # TVPL là xương sống, có ~450 văn bản xếp theo NGÀY BAN HÀNH (không phải ngày
@@ -104,14 +108,23 @@ RE_ENGLISH = re.compile(
     r"^(Decree|Circular|Decision|Law|Resolution|Ordinance|Directive|"
     r"Official Dispatch|Joint Circular)\s+No\.?", re.I)
 
-# tuoitre.vn (gồm các kênh NLĐ) ghi múi giờ "+07" thay vì "+0700" theo chuẩn
-# RFC 822. feedparser 6.0.14 gặp dạng này thì trả published_parsed = None mà
-# KHÔNG báo lỗi -> mọi mục của nguồn đó mất ngày ban hành. Vá trên XML thô.
-_RE_TZ_SHORT = re.compile(rb"(\d{2}:\d{2}:\d{2}\s*[+-]\d{2})(\s*<)")
+# Chuẩn hóa múi giờ sai chuẩn RFC 822 trước khi giao cho feedparser.
+# tuoitre.vn/nld ghi "+07", tuoitre.vn ghi "GMT+7"; feedparser trả None mà
+# KHÔNG báo lỗi -> mọi mục của nguồn đó mất ngày ban hành, lọt bộ lọc tuổi.
+_RE_TZ_FIX = re.compile(
+    rb"(\d{2}:\d{2}:\d{2})\s*(?:GMT\s*)?([+-])(\d{1,2})(?::?(\d{2}))?(?![\d:])")
+
+
+def _tz_repl(m):
+    gio = m.group(3)
+    if len(gio) == 1:
+        gio = b"0" + gio
+    phut = m.group(4) or b"00"
+    return m.group(1) + b" " + m.group(2) + gio + phut
 
 
 def fix_short_tz(raw):
-    return _RE_TZ_SHORT.sub(rb"\g<1>00\g<2>", raw)
+    return _RE_TZ_FIX.sub(_tz_repl, raw)
 
 
 def log(msg):
@@ -479,6 +492,28 @@ def build_weekly(seen):
 # ----------------------------------------------------------------------
 # 4. Bộ nhớ văn bản đã gửi
 # ----------------------------------------------------------------------
+def da_gui_hom_nay():
+    if FORCE_RUN:
+        log("FORCE_RUN bật -> bỏ qua kiểm tra trùng ngày.")
+        return False
+    try:
+        with open(LAST_RUN_FILE, encoding="utf-8") as f:
+            last = f.read().strip()
+    except FileNotFoundError:
+        return False
+    if last == today_vn():
+        log(f"Đã gửi bản tin ngày {last} rồi -> thoát, không gửi lại.")
+        return True
+    log(f"Lần gửi gần nhất: {last or '(chưa có)'} | Hôm nay: {today_vn()}")
+    return False
+
+
+def ghi_dau_ngay():
+    with open(LAST_RUN_FILE, "w", encoding="utf-8") as f:
+        f.write(today_vn())
+    log(f"Đã ghi dấu ngày gửi: {today_vn()}")
+
+
 def load_seen():
     try:
         with open(SEEN_FILE, encoding="utf-8") as f:
@@ -557,6 +592,9 @@ def main():
         log(f"THIẾU biến môi trường: {', '.join(missing)}")
         sys.exit(1)
 
+    if da_gui_hom_nay():
+        return
+
     seen = load_seen()
     items, nguon_ok, nguon_loi = collect()
 
@@ -568,6 +606,7 @@ def main():
     if not items:
         log("Không lấy được mục nào từ mọi nguồn.")
         send_telegram(build_su_co(items, len(nguon_ok), nguon_loi))
+        ghi_dau_ngay()
         return
 
     fresh, stats = filter_items(items, seen)
@@ -579,6 +618,7 @@ def main():
     if n_vanban == 0:
         if not nguon_ok:
             send_telegram(build_su_co(items, len(nguon_ok), nguon_loi))
+            ghi_dau_ngay()
             return
         ly_do = ("Không có văn bản pháp luật mới nào chưa từng gửi."
                  if not fresh else
@@ -588,10 +628,12 @@ def main():
         send_telegram(build_trong(items, stats, seen, len(nguon_ok), ly_do))
         if fresh:
             save_seen(seen, fresh)
+        ghi_dau_ngay()
         return
 
     send_telegram(build_message(fresh))
     save_seen(seen, fresh)   # ghi nhớ cả mục chưa liệt kê, tránh lặp vô hạn
+    ghi_dau_ngay()
     log("Xong.")
 
 if __name__ == "__main__":
