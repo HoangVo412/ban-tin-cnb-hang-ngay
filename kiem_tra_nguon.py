@@ -74,15 +74,33 @@ def _us_repl(m):
     return m.group(1) + iso.encode()
 
 
+# (3) Khoảng trắng Unicode. tuoitre.vn ngăn cách giây và AM/PM bằng
+#     U+202F NARROW NO-BREAK SPACE (bytes \xe2\x80\xaf), KHÔNG phải dấu cách
+#     thường. Trong regex kiểu bytes, "\s" chỉ khớp khoảng trắng ASCII nên
+#     mọi mẫu ở trên đều trượt. Đây là lý do bản vá (2) không ăn ở lần thử
+#     đầu - nhìn log chỉ thấy "9/10/2026 8:08:00 AM", tưởng là dấu cách.
+#     Quy hết về dấu cách thường trước khi làm gì khác.
+_RE_KHOANG_TRANG_LA = re.compile(
+    rb"\xc2\xa0"                 # U+00A0 no-break space
+    rb"|\xe2\x80[\x80-\x8a\xaf]"  # U+2000..U+200A, U+202F
+    rb"|\xe2\x81\x9f"             # U+205F medium mathematical space
+    rb"|\xe3\x80\x80")            # U+3000 ideographic space
+
+
 def fix_short_tz(raw):
     """Chuẩn hóa mọi biến thể ngày về dạng feedparser đọc được.
 
-    'GMT+7' / '+07' / 'GMT+07:00'  -> '+0700'
-    '9/1/2026 10:52:00 AM'         -> '2026-09-01T10:52:00+07:00'
+    khoảng trắng Unicode         -> dấu cách thường
+    'GMT+7' / '+07' / 'GMT+07:00' -> '+0700'
+    '9/1/2026 10:52:00 AM'        -> '2026-09-01T10:52:00+07:00'
     Chuỗi đã đúng chuẩn ('+0700', '-0500', 'GMT') giữ nguyên.
     """
-    raw = _RE_USDATE.sub(_us_repl, raw)
-    return _RE_TZ_FIX.sub(_tz_repl, raw)
+    raw = _RE_KHOANG_TRANG_LA.sub(b" ", raw)
+    # TZ_FIX chạy TRƯỚC, nếu không nó sẽ đụng vào chuỗi ISO "+07:00" mà
+    # USDATE vừa sinh ra và tách thành "T08:08:00 +0700" (vẫn đọc được
+    # nhưng bẩn). Ngày kiểu Mỹ không có dấu +/- nên TZ_FIX không chạm tới.
+    raw = _RE_TZ_FIX.sub(_tz_repl, raw)
+    return _RE_USDATE.sub(_us_repl, raw)
 
 
 # --- Chẩn đoán: in ra chuỗi ngày THÔ khi không parse được ---
@@ -129,18 +147,9 @@ UNG_VIEN = {
     "https://vtcnews.vn/rss/kinh-te.rss":              "VTC News - Kinh tế [??]",
     "https://cafef.vn/kinh-te-vi-mo-dau-tu.rss":       "CafeF - Vĩ mô v2 [??]",
     "https://thanhnien.vn/rss/tai-chinh-kinh-doanh.rss": "Thanh Niên - TC Kinh doanh [??]",
-    # Tuổi Trẻ: URL hiện tại dạng /<mục>.rss đọc được nội dung nhưng KHÔNG
-    # đọc được ngày. Endpoint /rss/<mục>.rss đã kiểm chứng ngày 10/09 là
-    # dùng định dạng "9/1/2026 10:52:00 AM" - code mới xử lý được dạng này.
-    # Đo song song để chọn endpoint đúng.
-    "https://tuoitre.vn/rss/thoi-su.rss":              "TTv2 - Thời sự [??]",
-    "https://tuoitre.vn/rss/phap-luat.rss":            "TTv2 - Pháp luật [??]",
-    "https://tuoitre.vn/rss/the-gioi.rss":             "TTv2 - Thế giới [??]",
-    "https://tuoitre.vn/rss/kinh-doanh.rss":           "TTv2 - Kinh doanh [??]",
-    "https://tuoitre.vn/rss/nhip-song-so.rss":         "TTv2 - Công nghệ [??]",
-    "https://tuoitre.vn/rss/cong-nghe.rss":            "TTv2 - Công nghệ b [??]",
-    "https://tuoitre.vn/rss/khoa-hoc.rss":             "TTv2 - Khoa học [??]",
-    "https://tuoitre.vn/rss/tin-moi-nhat.rss":         "TTv2 - Tin mới nhất [??]",
+    # Tuổi Trẻ đã KHÔNG còn nằm ở đây: nguyên nhân đã tìm ra (khoảng trắng
+    # U+202F), cả hai endpoint /<mục>.rss và /rss/<mục>.rss đều dùng cùng
+    # định dạng và đều đọc được sau khi vá. Giữ nguyên URL đang dùng.
 }
 
 
