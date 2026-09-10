@@ -58,7 +58,10 @@ jobs:
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # Tach thanh hai lenh git add rieng: neu gop lai ma mot file chua
+          # ton tai thi git bao loi va KHONG them file nao ca, ke ca file co that.
           git add seen_quydinh.json 2>/dev/null || true
+          git add last_run_quydinh.txt 2>/dev/null || true
           if git diff --cached --quiet; then
             echo "Khong co thay doi"
             exit 0
