@@ -86,21 +86,34 @@ def clean(text, limit=180):
 
 
 # ----------------------------------------------------------------------
-# VÁ LỖI MÚI GIỜ RÚT GỌN  (nguyên nhân gốc của tin cũ, phát hiện 09/09/2026)
+# VÁ LỖI ĐỊNH DẠNG MÚI GIỜ  (nguyên nhân gốc của tin cũ)
 # ----------------------------------------------------------------------
-# tuoitre.vn (gồm cả 11 kênh NLĐ) ghi pubDate dạng:
-#     Fri, 26 Jun 2026 03:08:00 +07
-# Chuẩn RFC 822 đòi "+0700". feedparser 6.0.14 gặp "+07" thì trả
-# published_parsed = None, KHÔNG báo lỗi.
-# Kết hợp với bộ lọc cũ (giữ mục không có ngày) -> mọi tin tuoitre.vn/NLĐ
-# lọt qua cửa sổ 26h bất kể cũ bao nhiêu. Bài 26/06 vẫn xuất hiện tháng 9.
-# Vá bằng cách chèn "00" vào múi giờ ngay trên chuỗi XML thô, trước khi parse.
-_RE_TZ_SHORT = re.compile(rb"(\d{2}:\d{2}:\d{2}\s*[+-]\d{2})(\s*<)")
+# Hai họ nguồn ghi múi giờ sai chuẩn RFC 822, feedparser trả None mà
+# KHÔNG báo lỗi (đo thực tế 10/09/2026):
+#   tuoitre.vn/nld/...  ->  "Fri, 26 Jun 2026 03:08:00 +07"
+#   tuoitre.vn/...      ->  "Sun, 14 Jun 2026 18:23:42 GMT+7"
+# Chuẩn đòi "+0700". Kết hợp với bộ lọc cũ (giữ mục không có ngày) thì
+# toàn bộ tin của 2 họ nguồn này lọt cửa sổ 26h bất kể cũ bao nhiêu.
+# Vá ngay trên chuỗi XML thô, trước khi giao cho feedparser.
+_RE_TZ_FIX = re.compile(
+    rb"(\d{2}:\d{2}:\d{2})\s*(?:GMT\s*)?([+-])(\d{1,2})(?::?(\d{2}))?(?![\d:])")
+
+
+def _tz_repl(m):
+    gio = m.group(3)
+    if len(gio) == 1:
+        gio = b"0" + gio
+    phut = m.group(4) or b"00"
+    return m.group(1) + b" " + m.group(2) + gio + phut
 
 
 def fix_short_tz(raw):
-    """'...03:08:00 +07</pubDate>' -> '...03:08:00 +0700</pubDate>'"""
-    return _RE_TZ_SHORT.sub(rb"\g<1>00\g<2>", raw)
+    """Chuẩn hóa mọi biến thể múi giờ về dạng +0700.
+
+    'GMT+7' -> '+0700' | '+07' -> '+0700' | 'GMT+07:00' -> '+0700'
+    '+0700' và '-0500' giữ nguyên. 'GMT' (không dấu) không đụng tới.
+    """
+    return _RE_TZ_FIX.sub(_tz_repl, raw)
 
 
 def fetch_one(item):
