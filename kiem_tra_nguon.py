@@ -85,6 +85,27 @@ def fix_short_tz(raw):
     return _RE_TZ_FIX.sub(_tz_repl, raw)
 
 
+# --- Chẩn đoán: in ra chuỗi ngày THÔ khi không parse được ---
+# Đã ba lần đoán sai định dạng ngày của tuoitre.vn. Thay vì đoán tiếp,
+# in thẳng chuỗi thô lấy từ XML ra log để nhìn tận mắt.
+_RE_MAU_NGAY = re.compile(
+    rb"<\s*(pubDate|lastBuildDate|dc:date|updated|published)[^>]*>"
+    rb"\s*(?:<!\[CDATA\[)?\s*([^<\]]{1,80})",
+    re.IGNORECASE)
+
+
+def mau_ngay_tho(raw, n=3):
+    """Trích tối đa n chuỗi ngày thô để in ra log khi feedparser bó tay."""
+    ra = []
+    for m in _RE_MAU_NGAY.finditer(raw):
+        s = m.group(2).decode("utf-8", "replace").strip()
+        if s:
+            ra.append(f"<{m.group(1).decode()}> {s!r}")
+        if len(ra) >= n:
+            break
+    return ra or ["(feed KHÔNG có thẻ ngày hợp lệ)"]
+
+
 # ĐỢT 2 - ứng viên bổ sung cho mảng LAO ĐỘNG / CHÍNH SÁCH, hiện đang mỏng
 # sau khi gỡ 11 kênh NLĐ.
 # [??] = SUY TỪ QUY LUẬT URL, CHƯA KIỂM CHỨNG. Chạy rồi giữ cái nào "ok".
@@ -108,8 +129,18 @@ UNG_VIEN = {
     "https://vtcnews.vn/rss/kinh-te.rss":              "VTC News - Kinh tế [??]",
     "https://cafef.vn/kinh-te-vi-mo-dau-tu.rss":       "CafeF - Vĩ mô v2 [??]",
     "https://thanhnien.vn/rss/tai-chinh-kinh-doanh.rss": "Thanh Niên - TC Kinh doanh [??]",
-    "https://tuoitre.vn/xa-hoi.rss":                   "Tuổi Trẻ - Xã hội [??]",
-    "https://tuoitre.vn/gia-that.rss":                 "Tuổi Trẻ - Giả thật [??]",
+    # Tuổi Trẻ: URL hiện tại dạng /<mục>.rss đọc được nội dung nhưng KHÔNG
+    # đọc được ngày. Endpoint /rss/<mục>.rss đã kiểm chứng ngày 10/09 là
+    # dùng định dạng "9/1/2026 10:52:00 AM" - code mới xử lý được dạng này.
+    # Đo song song để chọn endpoint đúng.
+    "https://tuoitre.vn/rss/thoi-su.rss":              "TTv2 - Thời sự [??]",
+    "https://tuoitre.vn/rss/phap-luat.rss":            "TTv2 - Pháp luật [??]",
+    "https://tuoitre.vn/rss/the-gioi.rss":             "TTv2 - Thế giới [??]",
+    "https://tuoitre.vn/rss/kinh-doanh.rss":           "TTv2 - Kinh doanh [??]",
+    "https://tuoitre.vn/rss/nhip-song-so.rss":         "TTv2 - Công nghệ [??]",
+    "https://tuoitre.vn/rss/cong-nghe.rss":            "TTv2 - Công nghệ b [??]",
+    "https://tuoitre.vn/rss/khoa-hoc.rss":             "TTv2 - Khoa học [??]",
+    "https://tuoitre.vn/rss/tin-moi-nhat.rss":         "TTv2 - Tin mới nhất [??]",
 }
 
 
@@ -138,7 +169,9 @@ def do_mot_nguon(pair):
             khong_ngay += 1
 
     if not dates:
-        return (ten, None, f"{len(entries)} mục, KHÔNG mục nào đọc được ngày")
+        mau = " | ".join(mau_ngay_tho(raw, 2))
+        return (ten, None,
+                f"{len(entries)} mục, KHÔNG đọc được ngày -> ngày thô: {mau}")
 
     moi = max(dates)
     tuoi = (now - moi).total_seconds() / 86400
