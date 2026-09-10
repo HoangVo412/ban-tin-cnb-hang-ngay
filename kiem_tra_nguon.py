@@ -1,131 +1,153 @@
-#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-kiem_tra_nguon.py — Đo sức khỏe từng nguồn RSS trước khi tin vào nó.
+kiem_tra_nguon.py - Đo sức khỏe từng nguồn RSS.  (bản 2, 10/09/2026)
 
-Chạy:  python kiem_tra_nguon.py
-Yêu cầu: pip install feedparser
+Chạy:
+    python kiem_tra_nguon.py            # kiểm tra các nguồn trong feeds.py
+    python kiem_tra_nguon.py ungvien    # kiểm tra thêm nhóm nguồn ứng viên
 
-In ra bảng: mỗi nguồn -> số mục, ngày bài mới nhất, tuổi bài mới nhất,
-số mục lọt cửa sổ 30h, số mục KHÔNG có ngày.
-Nguồn nào có "bài mới nhất" cách > 4 ngày = nguồn CHẾT, phải thay.
+Bản 2 sửa lỗi của bản 1: phải vá múi giờ dạng "+07" trước khi parse, nếu
+không mọi feed của tuoitre.vn đều bị báo nhầm là "không có ngày".
+
+Cột đọc thế nào:
+    MỚI NHẤT    ngày bài mới nhất trong feed
+    TUỔI        bài mới nhất cách bao lâu. > 4 ngày = NGUỒN CHẾT, phải thay.
+    <26h        số mục lọt cửa sổ bản tin
+    K.NGÀY      số mục không đọc được ngày. Khác 0 = feed sai định dạng.
 """
 
+import re
+import sys
 import calendar
-import socket
+import urllib.request
 from datetime import datetime, timedelta, timezone
+from concurrent.futures import ThreadPoolExecutor
 
 import feedparser
 
-socket.setdefaulttimeout(25)
-
 VN = timezone(timedelta(hours=7))
-MAX_AGE_HOURS = 30      # cửa sổ tin thời sự
-DEAD_DAYS = 4           # ngưỡng coi nguồn là chết
+MAX_AGE_HOURS = 26
+DEAD_DAYS = 4
+UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+      "(KHTML, like Gecko) Chrome/125.0 Safari/537.36")
 
-# ---------------------------------------------------------------------------
-# Dán đúng danh sách nguồn đang dùng trong feeds_*.py vào đây.
-# Danh sách dưới đây gồm 11 nguồn NLĐ đã xác nhận ĐỨNG YÊN từ 30/06/2026
-# + vài nguồn sống để đối chứng + vài nguồn ứng viên thay thế [??].
-# ---------------------------------------------------------------------------
-FEEDS = {
-    # --- NLĐ trên tuoitre.vn: ĐÃ KIỂM CHỨNG 09/09/2026 là đứng yên từ 30/06 ---
-    "NLĐ - Lao động":              "https://tuoitre.vn/nld/rss/lao-dong.rss",
-    "NLĐ - LĐ/Chính sách":         "https://tuoitre.vn/nld/rss/nld/lao-dong/chinh-sach.rss",
-    "NLĐ - LĐ/An sinh xã hội":     "https://tuoitre.vn/nld/rss/nld/lao-dong/an-sinh-xa-hoi.rss",
-    "NLĐ - LĐ/Việc làm":           "https://tuoitre.vn/nld/rss/nld/lao-dong/viec-lam.rss",
-    "NLĐ - LĐ/Công đoàn":          "https://tuoitre.vn/nld/rss/nld/lao-dong/cong-doan-cong-nhan.rss",
-    "NLĐ - LĐ/Xuất khẩu LĐ":       "https://tuoitre.vn/nld/rss/nld/lao-dong/xuat-khau-lao-dong.rss",
-    "NLĐ - Kinh tế":               "https://tuoitre.vn/nld/rss/kinh-te.rss",
-    "NLĐ - Tài chính/CK":          "https://tuoitre.vn/nld/rss/nld/kinh-te/tai-chinh-chung-khoan.rss",
-    "NLĐ - Đồng tiền thông minh":  "https://tuoitre.vn/nld/rss/dong-tien-thong-minh.rss",
-    "NLĐ - AI 365":                "https://tuoitre.vn/nld/rss/ai-365.rss",
-    "NLĐ - AI 365/Công nghệ số":   "https://tuoitre.vn/nld/rss/nld/ai-365/cong-nghe-so.rss",
+# "26 Jun 2026 03:08:00 +07"  ->  "... +0700"
+_RE_TZ_SHORT = re.compile(rb"(\d{2}:\d{2}:\d{2}\s*[+-]\d{2})(\s*<)")
 
-    # --- Đối chứng: nguồn đang sống ---
-    "Tuổi Trẻ - Kinh doanh":       "https://tuoitre.vn/rss/kinh-doanh.rss",
-    "Tuổi Trẻ - Pháp luật":        "https://tuoitre.vn/rss/phap-luat.rss",
 
-    # --- Ứng viên thay thế: [??] CHƯA KIỂM CHỨNG, xem kết quả rồi giữ/bỏ ---
-    "Lao Động - Công đoàn [??]":   "https://laodong.vn/rss/cong-doan.rss",
-    "Lao Động - Xã hội [??]":      "https://laodong.vn/rss/xa-hoi.rss",
-    "Lao Động - Kinh doanh [??]":  "https://laodong.vn/rss/kinh-doanh.rss",
-    "Dân Trí - Việc làm [??]":     "https://dantri.com.vn/viec-lam.rss",
-    "Dân Trí - An sinh [??]":      "https://dantri.com.vn/an-sinh.rss",
-    "VnExpress - Kinh doanh":      "https://vnexpress.net/rss/kinh-doanh.rss",
-    "Báo Chính phủ - Chính sách [??]": "https://baochinhphu.vn/rss/chinh-sach-moi.rss",
+def fix_short_tz(raw):
+    return _RE_TZ_SHORT.sub(rb"\g<1>00\g<2>", raw)
+
+
+# Nguồn ứng viên thay cho 11 kênh NLĐ đã chết.
+# [??] = SUY TỪ QUY LUẬT URL, CHƯA KIỂM CHỨNG. Chạy script rồi giữ cái nào sống.
+UNG_VIEN = {
+    "https://laodong.vn/rss/cong-doan.rss":            "Lao Động - Công đoàn [??]",
+    "https://laodong.vn/rss/xa-hoi.rss":               "Lao Động - Xã hội [??]",
+    "https://laodong.vn/rss/thoi-su.rss":              "Lao Động - Thời sự [??]",
+    "https://laodong.vn/rss/kinh-doanh.rss":           "Lao Động - Kinh doanh [??]",
+    "https://laodong.vn/rss/cong-nghe.rss":            "Lao Động - Công nghệ [??]",
+    "https://dantri.com.vn/rss/lao-dong-viec-lam.rss": "Dân Trí - LĐ Việc làm [??]",
+    "https://dantri.com.vn/rss/an-sinh.rss":           "Dân Trí - An sinh [??]",
+    "https://dantri.com.vn/rss/phap-luat.rss":         "Dân Trí - Pháp luật [??]",
+    "https://vietnamnet.vn/rss/kinh-doanh.rss":        "VietnamNet - Kinh doanh [??]",
+    "https://vietnamnet.vn/rss/thoi-su.rss":           "VietnamNet - Thời sự [??]",
+    "https://baochinhphu.vn/rss/chinh-sach-moi.rss":   "Báo CP - Chính sách [??]",
+    "https://baochinhphu.vn/rss/kinh-te.rss":          "Báo CP - Kinh tế [??]",
+    "https://thanhnien.vn/rss/doi-song.rss":           "Thanh Niên - Đời sống [??]",
+    "https://cafef.vn/thi-truong-chung-khoan.rss":     "CafeF - Chứng khoán [??]",
 }
 
 
-def parse_dt(entry):
-    """feedparser trả struct_time theo UTC -> phải dùng calendar.timegm.
-    Dùng time.mktime là SAI (mktime hiểu struct_time là giờ local)."""
-    for key in ("published_parsed", "updated_parsed", "created_parsed"):
-        st = entry.get(key)
+def do_mot_nguon(pair):
+    url, ten = pair
+    now = datetime.now(timezone.utc)
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": UA})
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            raw = resp.read()
+    except Exception as ex:
+        return (ten, None, f"KHÔNG TẢI ĐƯỢC: {type(ex).__name__} - {str(ex)[:60]}")
+
+    parsed = feedparser.parse(fix_short_tz(raw))
+    entries = parsed.entries or []
+    if not entries:
+        return (ten, None, "FEED RỖNG")
+
+    dates, khong_ngay = [], 0
+    for e in entries:
+        st = e.get("published_parsed") or e.get("updated_parsed")
         if st:
-            try:
-                return datetime.fromtimestamp(calendar.timegm(st), tz=timezone.utc)
-            except Exception:
-                continue
-    return None
+            dates.append(datetime.fromtimestamp(calendar.timegm(st),
+                                                tz=timezone.utc))
+        else:
+            khong_ngay += 1
+
+    if not dates:
+        return (ten, None, f"{len(entries)} mục, KHÔNG mục nào đọc được ngày")
+
+    moi = max(dates)
+    tuoi = (now - moi).total_seconds() / 86400
+    trong_cua_so = sum(
+        1 for d in dates
+        if timedelta(0) <= (now - d) <= timedelta(hours=MAX_AGE_HOURS))
+    return (ten, {
+        "so_muc": len(entries),
+        "moi_nhat": moi,
+        "tuoi": tuoi,
+        "trong_cua_so": trong_cua_so,
+        "khong_ngay": khong_ngay,
+        "song": tuoi <= DEAD_DAYS,
+    }, None)
 
 
 def main():
+    from feeds import FEEDS
+    danh_sach = dict(FEEDS)
+    if len(sys.argv) > 1 and sys.argv[1].lower().startswith("ungvien"):
+        danh_sach.update(UNG_VIEN)
+
     now = datetime.now(timezone.utc)
-    print(f"Giờ chạy: {now.astimezone(VN):%d/%m/%Y %H:%M} (VN)")
-    print(f"Cửa sổ tin: {MAX_AGE_HOURS}h | Ngưỡng chết: {DEAD_DAYS} ngày\n")
+    print(f"Giờ chạy : {now.astimezone(VN):%d/%m/%Y %H:%M} (VN)")
+    print(f"Cửa sổ   : {MAX_AGE_HOURS}h   |   Ngưỡng nguồn chết: {DEAD_DAYS} ngày")
+    print(f"Số nguồn : {len(danh_sach)}\n")
 
-    header = f"{'NGUỒN':<32}{'MỤC':>5}{'MỚI NHẤT':>16}{'TUỔI':>9}{'<30h':>6}{'KHÔNG NGÀY':>12}  TRẠNG THÁI"
-    print(header)
-    print("-" * len(header))
+    head = (f"{'NGUỒN':<34}{'MỤC':>5}{'MỚI NHẤT':>15}{'TUỔI':>9}"
+            f"{'<26h':>6}{'K.NGÀY':>8}  TRẠNG THÁI")
+    print(head)
+    print("-" * len(head))
 
-    chet, khong_lay_duoc = [], []
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        ket_qua = list(pool.map(do_mot_nguon, danh_sach.items()))
 
-    for ten, url in FEEDS.items():
-        try:
-            d = feedparser.parse(url)
-            entries = d.entries or []
-        except Exception as e:
-            print(f"{ten:<32}{'LỖI':>5}   {type(e).__name__}")
-            khong_lay_duoc.append(ten)
+    chet, hong = [], []
+    for ten, r, loi in sorted(ket_qua, key=lambda x: x[0]):
+        if loi:
+            print(f"{ten:<34}{'-':>5}{'-':>15}{'-':>9}{'-':>6}{'-':>8}  {loi}")
+            hong.append(ten)
             continue
-
-        if not entries:
-            print(f"{ten:<32}{0:>5}{'-':>16}{'-':>9}{'-':>6}{'-':>12}  FEED RỖNG")
-            khong_lay_duoc.append(ten)
-            continue
-
-        dates = [dt for dt in (parse_dt(e) for e in entries) if dt]
-        khong_ngay = len(entries) - len(dates)
-
-        if not dates:
-            print(f"{ten:<32}{len(entries):>5}{'-':>16}{'-':>9}{'-':>6}{khong_ngay:>12}  KHÔNG CÓ NGÀY")
-            chet.append(ten)
-            continue
-
-        moi_nhat = max(dates)
-        tuoi_ngay = (now - moi_nhat).total_seconds() / 86400
-        trong_cua_so = sum(1 for dt in dates
-                           if timedelta(0) <= (now - dt) <= timedelta(hours=MAX_AGE_HOURS))
-        song = tuoi_ngay <= DEAD_DAYS
-        if not song:
-            chet.append(ten)
-
-        print(f"{ten:<32}{len(entries):>5}"
-              f"{moi_nhat.astimezone(VN):%d/%m %H:%M}"
-              f"{tuoi_ngay:>8.1f}d{trong_cua_so:>6}{khong_ngay:>12}"
-              f"  {'ok' if song else '*** CHẾT ***'}")
+        trang_thai = "ok" if r["song"] else "*** CHẾT ***"
+        if not r["song"]:
+            chet.append(f"{ten}  (mới nhất {r['moi_nhat'].astimezone(VN):%d/%m/%Y})")
+        if r["khong_ngay"]:
+            trang_thai += "  <- có mục sai định dạng ngày"
+        print(f"{ten:<34}{r['so_muc']:>5}"
+              f"{r['moi_nhat'].astimezone(VN):%d/%m %H:%M}"
+              f"{r['tuoi']:>8.1f}d{r['trong_cua_so']:>6}{r['khong_ngay']:>8}"
+              f"  {trang_thai}")
 
     print()
     if chet:
-        print("=== NGUỒN CHẾT / ĐỨNG YÊN — PHẢI THAY ===")
+        print("=== NGUỒN CHẾT / ĐỨNG YÊN - PHẢI THAY ===")
         for t in chet:
             print(f"  - {t}")
-    if khong_lay_duoc:
-        print("=== NGUỒN KHÔNG LẤY ĐƯỢC ===")
-        for t in khong_lay_duoc:
+        print()
+    if hong:
+        print("=== NGUỒN KHÔNG TẢI ĐƯỢC ===")
+        for t in hong:
             print(f"  - {t}")
-    if not chet and not khong_lay_duoc:
+        print()
+    if not chet and not hong:
         print("Tất cả nguồn đều sống.")
 
 
