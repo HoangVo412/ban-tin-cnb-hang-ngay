@@ -104,6 +104,16 @@ RE_ENGLISH = re.compile(
     r"^(Decree|Circular|Decision|Law|Resolution|Ordinance|Directive|"
     r"Official Dispatch|Joint Circular)\s+No\.?", re.I)
 
+# tuoitre.vn (gồm các kênh NLĐ) ghi múi giờ "+07" thay vì "+0700" theo chuẩn
+# RFC 822. feedparser 6.0.14 gặp dạng này thì trả published_parsed = None mà
+# KHÔNG báo lỗi -> mọi mục của nguồn đó mất ngày ban hành. Vá trên XML thô.
+_RE_TZ_SHORT = re.compile(rb"(\d{2}:\d{2}:\d{2}\s*[+-]\d{2})(\s*<)")
+
+
+def fix_short_tz(raw):
+    return _RE_TZ_SHORT.sub(rb"\g<1>00\g<2>", raw)
+
+
 def log(msg):
     print(f"[{datetime.now(VN_TZ):%H:%M:%S}] {msg}", flush=True)
 
@@ -182,13 +192,13 @@ def fetch_one(entry):
 
     if raw is None:
         log(f"  LỖI {source}: {type(last_err).__name__} - {last_err}")
-        return out
+        return (source, out, False)
 
     try:
-        parsed = feedparser.parse(raw)
+        parsed = feedparser.parse(fix_short_tz(raw))
         if not parsed.entries:
             log(f"  (trống) {source}")
-            return out
+            return (source, out, False)
         if "thuvienphapluat" in url:
             limit = MAX_PER_FEED_TVPL
         elif "congbao" in url:
@@ -217,10 +227,20 @@ def fetch_one(entry):
                 "title": title, "link": link, "cat": cat,
                 "source": source, "kind": kind, "pub": pub,
             })
-        log(f"  OK  {source}: {len(out)} mục")
+        # Ngày mới nhất của nguồn: nguồn văn bản đứng yên nhiều tuần là dấu
+        # hiệu nguồn chết, phải nhìn thấy trong log chứ không im lặng.
+        dates = [x["pub"] for x in out if x["pub"]]
+        if dates:
+            moi = max(dates)
+            tuoi = (datetime.now(timezone.utc) - moi).total_seconds() / 86400
+            log(f"  OK  {source}: {len(out)} mục | mới nhất "
+                f"{moi.astimezone(VN_TZ):%d/%m/%Y} (cách {tuoi:.1f} ngày)")
+        else:
+            log(f"  OK  {source}: {len(out)} mục | KHÔNG mục nào đọc được ngày")
+        return (source, out, True)
     except Exception as ex:
         log(f"  LỖI {source}: {type(ex).__name__} - {ex}")
-    return out
+    return (source, out, False)
 
 def collect():
     # In cấu hình trạm ra log. FEED_PROXY để dạng Variable (không phải Secret)
@@ -231,12 +251,16 @@ def collect():
     else:
         log("Trạm lấy RSS: CHƯA KHAI (FEED_PROXY rỗng) -> mọi nguồn gọi thẳng.")
     log(f"Đọc {len(FEEDS)} nguồn...")
-    items = []
+    items, nguon_ok, nguon_loi = [], [], []
     with ThreadPoolExecutor(max_workers=6) as pool:
-        for chunk in pool.map(fetch_one, FEEDS.items()):
+        for source, chunk, ok in pool.map(fetch_one, FEEDS.items()):
             items.extend(chunk)
-    log(f"Thu được {len(items)} mục thô.")
-    return items
+            (nguon_ok if ok else nguon_loi).append(source)
+    log(f"Thu được {len(items)} mục thô. "
+        f"Nguồn lấy được: {len(nguon_ok)}/{len(FEEDS)}.")
+    if nguon_loi:
+        log(f"Nguồn KHÔNG lấy được: {', '.join(nguon_loi)}")
+    return items, nguon_ok, nguon_loi
 
 # ----------------------------------------------------------------------
 # 2. Lọc
@@ -318,7 +342,9 @@ def filter_items(items, seen):
         for sc, t in near_miss[:15]:
             log(f"      [{sc}đ] {t[:105]}")
         log("--- Hết bảng soát. Thấy cái nào đáng đọc -> thêm từ khóa.")
-    return kept
+
+    stats["near_miss"] = near_miss
+    return kept, stats
 
 def group_of(item):
     if item.get("local"):
@@ -392,6 +418,46 @@ def build_message(items):
               "Nguồn: congbao.chinhphu.vn, thuvienphapluat.vn,",
               "baohiemxahoi.gov.vn và các báo điện tử."]
     return "\n".join(lines)
+
+def build_trong(items, stats, seen, nguon_ok, ly_do):
+    """Tin nhắn khi KHÔNG có văn bản mới.
+
+    Theo thiết kế cũ bot im lặng để tránh nhiễu. Nay báo, nhưng phải kèm số
+    liệu - nếu chỉ nhắn 'không có gì mới' thì sau hai tuần người đọc tắt
+    thông báo, mà vẫn không phân biệt được 'thật sự không có' với 'hỏng'.
+    """
+    tong_nguon = len(FEEDS)
+    lines = [
+        f"QUY ĐỊNH HR - {datetime.now(VN_TZ):%d/%m/%Y %H:%M}",
+        "=" * 34, "",
+        ly_do, "",
+        f"Đã quét : {len(items)} mục / {nguon_ok}/{tong_nguon} nguồn lấy được",
+        f"Bỏ quá cũ (>{MAX_AGE_DAYS} ngày) : {stats.get('cu', 0)}",
+        f"Bỏ do không đạt ngưỡng từ khóa   : {stats.get('lowscore', 0)}",
+        f"Bỏ do đã gửi ở kỳ trước          : {stats.get('seen', 0)}",
+        f"Bộ nhớ hiện có : {len(seen)} văn bản",
+    ]
+    nm = stats.get("near_miss") or []
+    if nm:
+        nm = sorted(nm, reverse=True)[:5]
+        lines += ["", "Sát ngưỡng (không gửi, để anh soát bỏ sót):", ""]
+        for sc, t in nm:
+            lines.append(f"  [{sc}đ] {t[:110]}")
+    lines += ["", "-" * 34, "Hệ thống hoạt động bình thường."]
+    return "\n".join(lines)
+
+
+def build_su_co(items, nguon_ok, nguon_loi):
+    """Nguồn hỏng KHÁC HẲN 'không có văn bản mới'. Không được gộp làm một."""
+    return "\n".join([
+        f"CẢNH BÁO - QUY ĐỊNH HR - {datetime.now(VN_TZ):%d/%m/%Y %H:%M}",
+        "=" * 34, "",
+        "SỰ CỐ KỸ THUẬT, không phải 'không có văn bản mới'.", "",
+        f"Chỉ {nguon_ok}/{len(FEEDS)} nguồn lấy được, thu {len(items)} mục.",
+        f"Nguồn lỗi: {', '.join(nguon_loi) if nguon_loi else 'xem log'}",
+        "", "-" * 34, "Mở GitHub Actions xem log để biết nguyên nhân.",
+    ])
+
 
 def build_weekly(seen):
     """Tổng kết tuần, gửi sáng thứ Hai."""
@@ -492,42 +558,36 @@ def main():
         sys.exit(1)
 
     seen = load_seen()
-    items = collect()
-
-    if not items:
-        log("Không lấy được mục nào từ mọi nguồn.")
-        send_telegram("Bot Quy định HR: không lấy được dữ liệu từ nguồn nào. "
-                      "Kiểm tra log GitHub Actions.")
-        return
-
-    fresh = filter_items(items, seen)
+    items, nguon_ok, nguon_loi = collect()
 
     # Thứ Hai: gửi tổng kết tuần trước, để biết hệ thống vẫn sống
-    is_monday = datetime.now(VN_TZ).weekday() == 0
-    if is_monday:
+    if datetime.now(VN_TZ).weekday() == 0:
         send_telegram(build_weekly(seen))
 
-    if not fresh:
-        if FORCE_RUN:
-            # Chạy tay: phải phản hồi để anh biết hệ thống còn sống,
-            # nếu im lặng thì không phân biệt được "không có gì" với "hỏng".
-            send_telegram(
-                f"Bot Quy định HR - {datetime.now(VN_TZ):%d/%m/%Y %H:%M}\n\n"
-                f"Đã quét {len(items)} mục từ {len(FEEDS)} nguồn.\n"
-                f"Không có văn bản mới nào chưa từng gửi.\n"
-                f"Bộ nhớ hiện có {len(seen)} văn bản.")
-        else:
-            log("Không có văn bản mới -> im lặng (đúng thiết kế, tránh nhiễu).")
+    # Không lấy được gì = SỰ CỐ, phải nói rõ là sự cố.
+    if not items:
+        log("Không lấy được mục nào từ mọi nguồn.")
+        send_telegram(build_su_co(items, len(nguon_ok), nguon_loi))
         return
 
+    fresh, stats = filter_items(items, seen)
     n_vanban = sum(1 for i in fresh if i["kind"] == "vanban")
-    if n_vanban == 0 and not FORCE_RUN:
-        # Bot này tồn tại để báo VĂN BẢN mới. Nếu nguồn văn bản chết mà vẫn
-        # gửi 5 tin tuyên truyền dưới tiêu đề "VĂN BẢN, QUY ĐỊNH MỚI" thì
-        # bản tin thành sai bản chất và gây hiểu nhầm. Thà im lặng.
-        log("Không có văn bản pháp quy nào (chỉ có tin ngành) -> không gửi.")
-        log("Nếu tình trạng này kéo dài, nguồn văn bản đang hỏng - kiểm tra log.")
-        save_seen(seen, fresh)
+
+    # Không có văn bản pháp quy mới -> vẫn BÁO, kèm số liệu.
+    # Bot này tồn tại để báo VĂN BẢN. Nếu chỉ có tin ngành thì không được
+    # gửi dưới tiêu đề "VĂN BẢN, QUY ĐỊNH MỚI" - sẽ sai bản chất.
+    if n_vanban == 0:
+        if not nguon_ok:
+            send_telegram(build_su_co(items, len(nguon_ok), nguon_loi))
+            return
+        ly_do = ("Không có văn bản pháp luật mới nào chưa từng gửi."
+                 if not fresh else
+                 f"Không có văn bản pháp luật mới. "
+                 f"(Có {len(fresh)} tin ngành nhưng không phải văn bản pháp quy.)")
+        log(f"{ly_do} -> gửi thông báo trống.")
+        send_telegram(build_trong(items, stats, seen, len(nguon_ok), ly_do))
+        if fresh:
+            save_seen(seen, fresh)
         return
 
     send_telegram(build_message(fresh))
