@@ -48,6 +48,11 @@ MODEL_FALLBACKS = [
 AI_TIME_BUDGET = 480
 HOURS_BACK = int(os.environ.get("HOURS_BACK", "26"))   # 26h để không hụt tin sát giờ
 MAX_PER_FEED = 30
+
+# Nguồn không có bài mới quá số ngày này = nguồn CHẾT -> bỏ cả nguồn, không
+# lấy mục nào. Lý do: 09/09/2026 phát hiện 11 feed NLĐ trên tuoitre.vn đứng
+# yên từ 30/06 nhưng vẫn cập nhật lastBuildDate mỗi ngày, nên trông như sống.
+FEED_DEAD_DAYS = int(os.environ.get("FEED_DEAD_DAYS", "4"))
 MAX_ITEMS_TO_AI = 280
 QUOTA_CB = 70          # suất dành riêng cho tin lao động/BHXH/thuế
 QUOTA_TECH = 70        # suất dành riêng cho tin tài chính/công nghệ/AI
@@ -80,6 +85,24 @@ def clean(text, limit=180):
     return text[:limit]
 
 
+# ----------------------------------------------------------------------
+# VÁ LỖI MÚI GIỜ RÚT GỌN  (nguyên nhân gốc của tin cũ, phát hiện 09/09/2026)
+# ----------------------------------------------------------------------
+# tuoitre.vn (gồm cả 11 kênh NLĐ) ghi pubDate dạng:
+#     Fri, 26 Jun 2026 03:08:00 +07
+# Chuẩn RFC 822 đòi "+0700". feedparser 6.0.14 gặp "+07" thì trả
+# published_parsed = None, KHÔNG báo lỗi.
+# Kết hợp với bộ lọc cũ (giữ mục không có ngày) -> mọi tin tuoitre.vn/NLĐ
+# lọt qua cửa sổ 26h bất kể cũ bao nhiêu. Bài 26/06 vẫn xuất hiện tháng 9.
+# Vá bằng cách chèn "00" vào múi giờ ngay trên chuỗi XML thô, trước khi parse.
+_RE_TZ_SHORT = re.compile(rb"(\d{2}:\d{2}:\d{2}\s*[+-]\d{2})(\s*<)")
+
+
+def fix_short_tz(raw):
+    """'...03:08:00 +07</pubDate>' -> '...03:08:00 +0700</pubDate>'"""
+    return _RE_TZ_SHORT.sub(rb"\g<1>00\g<2>", raw)
+
+
 def fetch_one(item):
     url, source = item
     out = []
@@ -87,7 +110,7 @@ def fetch_one(item):
         req = urllib.request.Request(url, headers={"User-Agent": UA})
         with urllib.request.urlopen(req, timeout=25) as resp:
             raw = resp.read()
-        parsed = feedparser.parse(raw)
+        parsed = feedparser.parse(fix_short_tz(raw))
         if not parsed.entries:
             log(f"  (trống) {source}")
             return out
@@ -105,7 +128,20 @@ def fetch_one(item):
                 "source": source,
                 "published": published,
             })
-        log(f"  OK  {source}: {len(out)} tin")
+
+        # --- Kiểm tra sức khỏe nguồn ---
+        dates = [x["published"] for x in out if x["published"]]
+        if not dates:
+            log(f"  BỎ  {source}: {len(out)} mục nhưng KHÔNG mục nào đọc được ngày")
+            return []
+        moi_nhat = max(dates)
+        tuoi = (datetime.now(timezone.utc) - moi_nhat).total_seconds() / 86400
+        if tuoi > FEED_DEAD_DAYS:
+            log(f"  BỎ  {source}: NGUỒN CHẾT - bài mới nhất "
+                f"{moi_nhat.astimezone(VN_TZ):%d/%m/%Y}, cách {tuoi:.1f} ngày")
+            return []
+        log(f"  OK  {source}: {len(out)} tin | mới nhất "
+            f"{moi_nhat.astimezone(VN_TZ):%d/%m %H:%M} ({tuoi*24:.0f}h trước)")
     except Exception as ex:
         log(f"  LỖI {source}: {type(ex).__name__} - {ex}")
     return out
@@ -118,22 +154,38 @@ def collect():
         for chunk in pool.map(fetch_one, FEEDS.items()):
             items.extend(chunk)
 
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=HOURS_BACK)
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(hours=HOURS_BACK)
     fresh, seen = [], set()
+    bo_cu, bo_khong_ngay, bo_trung = 0, 0, 0
     for it in items:
         if not it["title"] or not it["link"]:
             continue
-        if it["published"] and it["published"] < cutoff:
+        # KHÔNG có ngày -> LOẠI. Trước đây giữ lại, và đó chính là chỗ tin cũ
+        # lọt qua: feed nào feedparser không đọc được ngày thì mọi mục đều lọt.
+        if it["published"] is None:
+            bo_khong_ngay += 1
+            continue
+        if it["published"] < cutoff:
+            bo_cu += 1
+            continue
+        if it["published"] - now > timedelta(hours=6):
+            bo_cu += 1          # ngày ở tương lai = feed lỗi
             continue
         key = re.sub(r"[^a-z0-9à-ỹ]+", "", it["title"].lower())[:70]
         if key in seen:
+            bo_trung += 1
             continue
         seen.add(key)
         fresh.append(it)
 
-    fresh.sort(key=lambda x: x["published"] or datetime.min.replace(tzinfo=timezone.utc),
-               reverse=True)
-    log(f"Còn {len(fresh)} tin trong {HOURS_BACK}h qua (đã khử trùng lặp).")
+    fresh.sort(key=lambda x: x["published"], reverse=True)
+    log(f"Lọc: bỏ {bo_cu} tin cũ/sai ngày, {bo_khong_ngay} tin không đọc được "
+        f"ngày, {bo_trung} tin trùng.")
+    log(f"Còn {len(fresh)} tin trong {HOURS_BACK}h qua.")
+    if fresh:
+        log(f"Khoảng ngày: {fresh[-1]['published'].astimezone(VN_TZ):%d/%m %H:%M}"
+            f" -> {fresh[0]['published'].astimezone(VN_TZ):%d/%m %H:%M}")
     return fresh
 
 
@@ -502,6 +554,18 @@ def main():
         send_telegram("Bản tin hôm nay: không lấy được tin nào từ các nguồn RSS. "
                       "Kiểm tra lại log GitHub Actions.")
         return
+
+    # --- Chốt chặn cuối: nếu vẫn còn tin quá hạn lọt tới đây thì KÊU TO ---
+    now = datetime.now(timezone.utc)
+    limit = timedelta(hours=HOURS_BACK)
+    lot_luoi = [i for i in items
+                if i["published"] is None or (now - i["published"]) > limit]
+    if lot_luoi:
+        cu_nhat = min(x["published"] for x in lot_luoi if x["published"])
+        log(f"*** LỖI LOGIC: {len(lot_luoi)} tin quá {HOURS_BACK}h vẫn lọt vào "
+            f"tập gửi AI. Cũ nhất: {cu_nhat.astimezone(VN_TZ):%d/%m/%Y}.")
+        items = [i for i in items if i not in lot_luoi]
+        log(f"    Đã cắt bỏ, còn {len(items)} tin.")
 
     try:
         body = summarize(items)
