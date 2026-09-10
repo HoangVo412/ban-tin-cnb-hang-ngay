@@ -42,6 +42,8 @@ FEEDS = {
     "https://dantri.com.vn/rss/lao-dong-viec-lam.rss":  "Dân Trí - LĐ Việc làm",      # [ĐO] mới
     "https://dantri.com.vn/rss/phap-luat.rss":          "Dân Trí - Pháp luật",        # [ĐO] mới
     "https://thanhnien.vn/rss/doi-song.rss":            "Thanh Niên - Đời sống",      # [ĐO] mới
+    "https://vietnamnet.vn/rss/phap-luat.rss":         "VietnamNet - Pháp luật",     # [ĐO] 10/09 đợt 2
+    "https://vietnamnet.vn/rss/doi-song.rss":          "VietnamNet - Đời sống",      # [ĐO] 10/09 đợt 2
 
     # ================= TÀI CHÍNH - KINH TẾ =================
     "https://vnexpress.net/rss/kinh-doanh.rss":         "VnExpress - Kinh doanh",     # [ĐO]
@@ -51,6 +53,7 @@ FEEDS = {
     "https://cafef.vn/vi-mo-dau-tu.rss":                "CafeF - Vĩ mô",              # [ĐO]
     "https://cafef.vn/tai-chinh-ngan-hang.rss":         "CafeF - Tài chính NH",       # [ĐO]
     "https://cafef.vn/thi-truong-chung-khoan.rss":      "CafeF - Chứng khoán",        # [ĐO] mới
+    "https://vtcnews.vn/rss/kinh-te.rss":               "VTC News - Kinh tế",         # [ĐO] 10/09 đợt 2
 
     # ================= CÔNG NGHỆ - AI =================
     "https://vnexpress.net/rss/khoa-hoc-cong-nghe.rss": "VnExpress - Khoa học CN",    # [ĐO]
@@ -79,6 +82,11 @@ FEEDS = {
     # https://vietnamnet.vn/rss/kinh-doanh.rss : đứng yên từ 08/08/2026
     # https://laodong.vn/rss/*.rss             : trả 200 nhưng feed RỖNG
     # https://baochinhphu.vn/rss/*.rss         : 404
+    # https://tienphong.vn/rss/*.rss           : feed RỖNG
+    # https://www.vietnamplus.vn/rss/*.rss     : feed RỖNG
+    # https://vov.vn/rss/*.rss                 : 403
+    # https://vietnamnet.vn/rss/kinh-doanh-tai-chinh.rss : 404
+    # https://thanhnien.vn/rss/tai-chinh-kinh-doanh.rss  : 404
 }
 
 # ======================================================================
@@ -149,6 +157,7 @@ SOURCE_BOOST_CB = {
     "Dân Trí - LĐ Việc làm": 6,
     "HR Dive": 5,
     "Thanh Niên - Đời sống": 2,
+    "VietnamNet - Đời sống": 2,
 }
 SOURCE_BOOST_TECH = {
     "TechCrunch - AI": 6,
@@ -159,4 +168,5 @@ SOURCE_BOOST_TECH = {
     "Tuổi Trẻ - Công nghệ": 3,
     "Tuổi Trẻ - Khoa học": 3,
     "VnExpress - Khoa học CN": 3,
+    "VTC News - Kinh tế": 2,
 }
