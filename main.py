@@ -139,6 +139,27 @@ def fix_short_tz(raw):
     return _RE_TZ_FIX.sub(_tz_repl, raw)
 
 
+# --- Chẩn đoán: in ra chuỗi ngày THÔ khi không parse được ---
+# Đã ba lần đoán sai định dạng ngày của tuoitre.vn. Thay vì đoán tiếp,
+# in thẳng chuỗi thô lấy từ XML ra log để nhìn tận mắt.
+_RE_MAU_NGAY = re.compile(
+    rb"<\s*(pubDate|lastBuildDate|dc:date|updated|published)[^>]*>"
+    rb"\s*(?:<!\[CDATA\[)?\s*([^<\]]{1,80})",
+    re.IGNORECASE)
+
+
+def mau_ngay_tho(raw, n=3):
+    """Trích tối đa n chuỗi ngày thô để in ra log khi feedparser bó tay."""
+    ra = []
+    for m in _RE_MAU_NGAY.finditer(raw):
+        s = m.group(2).decode("utf-8", "replace").strip()
+        if s:
+            ra.append(f"<{m.group(1).decode()}> {s!r}")
+        if len(ra) >= n:
+            break
+    return ra or ["(feed KHÔNG có thẻ ngày hợp lệ)"]
+
+
 def fetch_one(item):
     url, source = item
     out = []
@@ -169,6 +190,8 @@ def fetch_one(item):
         dates = [x["published"] for x in out if x["published"]]
         if not dates:
             log(f"  BỎ  {source}: {len(out)} mục nhưng KHÔNG mục nào đọc được ngày")
+            for d in mau_ngay_tho(raw):
+                log(f"       ngày thô: {d}")
             return []
         moi_nhat = max(dates)
         tuoi = (datetime.now(timezone.utc) - moi_nhat).total_seconds() / 86400
