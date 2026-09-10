@@ -40,10 +40,16 @@ FEEDS = {
 
     # ---------- BÁO CHÍ (bắt nhanh, kém chính xác hơn) ----------
     "https://vnexpress.net/rss/phap-luat.rss":  ("VnExpress - Pháp luật", "tin", "std"),
-    "https://tuoitre.vn/nld/rss/nld/lao-dong/chinh-sach.rss":
-        ("NLĐ - Lao động/Chính sách", "tin", "std"),
-    "https://tuoitre.vn/nld/rss/nld/lao-dong/an-sinh-xa-hoi.rss":
-        ("NLĐ - Lao động/An sinh xã hội", "tin", "std"),
+    "https://dantri.com.vn/rss/lao-dong-viec-lam.rss":
+        ("Dân Trí - LĐ Việc làm", "tin", "std"),
+    "https://vietnamnet.vn/rss/phap-luat.rss":
+        ("VietnamNet - Pháp luật", "tin", "std"),
+
+    # ---------- ĐÃ GỠ 10/09/2026: hai kênh NLĐ trên tuoitre.vn ----------
+    # tuoitre.vn/nld/rss/nld/lao-dong/chinh-sach.rss     -> đứng yên từ 29/06/2026
+    # tuoitre.vn/nld/rss/nld/lao-dong/an-sinh-xa-hoi.rss -> đứng yên từ 30/06/2026
+    # Mỗi lần chạy chúng nạp 80 mục rồi bị MAX_AGE_DAYS loại sạch - vô ích.
+    # Đã kiểm tra cả tên miền cũ nld.com.vn: chuyển hướng về cùng nội dung chết.
 
     # ---------- ĐÃ LOẠI ----------
     # Cục Thuế (gdt.gov.vn/wps/wcm/...): feed hỏng, mọi mục đều có tiêu đề
